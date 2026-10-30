@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- Only for NotifyIcon (system tray). -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>IPhoneWebcam</AssemblyName>
+    <RootNamespace>IPhoneWebcam.Desktop</RootNamespace>
+    <!-- Publish with -r win-x64 or -r win-arm64 (see ..\build.cmd); the native engine must match. -->
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
+    <Product>iPhone Webcam</Product>
+    <Company>iPhone Webcam contributors</Company>
+    <Copyright>Licensed under the Apache License 2.0</Copyright>
+    <Version>1.0.0</Version>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\AppIcon.ico" />
+  </ItemGroup>
+
+</Project>

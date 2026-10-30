@@ -1,0 +1,32 @@
+# XcodeGen spec. On a Mac:  brew install xcodegen && cd ios && xcodegen
+# Unsigned .ipa for sideloading (what CI does):  ./build-ipa.sh <version> <build>
+name: IPhoneWebcam
+options:
+  bundleIdPrefix: io.github.liamniou
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  IPhoneWebcam:
+    type: application
+    platform: iOS
+    sources:
+      - path: IPhoneWebcam
+        excludes:
+          - Info.plist
+    settings:
+      base:
+        INFOPLIST_FILE: IPhoneWebcam/Info.plist
+        # Must be unique per Apple developer account. If Xcode reports that it's unavailable,
+        # change it to something of your own, e.g. com.yourname.iphonewebcam.
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.liamniou.iphonewebcam
+        PRODUCT_NAME: IPhoneWebcam
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
+        # Set your team in Xcode (Signing & Capabilities) or put the Team ID here.
+        DEVELOPMENT_TEAM: ""

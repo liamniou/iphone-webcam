@@ -1,0 +1,153 @@
+<Window x:Class="IPhoneWebcam.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="iPhone Webcam" Width="1200" Height="720" MinWidth="900" MinHeight="580"
+        Background="{StaticResource WindowBrush}" Icon="Assets/AppIcon.ico"
+        WindowStartupLocation="CenterScreen" UseLayoutRounding="True">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="340" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Preview -->
+        <Grid Margin="16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Border x:Name="CameraWarning" Grid.Row="0" Background="#33FF453A" BorderBrush="{StaticResource BadBrush}"
+                    BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,12" Visibility="Collapsed">
+                <TextBlock x:Name="CameraWarningText" TextWrapping="Wrap" />
+            </Border>
+
+            <Border Grid.Row="1" Background="Black" CornerRadius="10" ClipToBounds="True">
+                <Grid>
+                    <Image x:Name="PreviewImage" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
+
+                    <StackPanel x:Name="Overlay" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="460">
+                        <TextBlock x:Name="OverlayTitle" Text="No iPhone connected" FontSize="22" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" TextAlignment="Center" />
+                        <TextBlock x:Name="OverlayText" Style="{StaticResource SubtleText}" Margin="0,8,0,0"
+                                   TextAlignment="Center" HorizontalAlignment="Center"
+                                   Text="Open the iPhone Webcam app on your iPhone and make sure both devices are on the same Wi-Fi." />
+                    </StackPanel>
+
+                    <Border x:Name="LiveBadge" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="14"
+                            Background="#CC000000" CornerRadius="4" Padding="8,3" Visibility="Collapsed">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="8" Height="8" Fill="{StaticResource BadBrush}" VerticalAlignment="Center" />
+                            <TextBlock Text="LIVE" FontSize="11" FontWeight="Bold" Margin="6,0,0,0" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Grid.Row="2" Margin="2,10,0,0" Style="{StaticResource SubtleText}"
+                       Text="Select &quot;iPhone Webcam&quot; as the camera in Zoom, Teams, OBS or any other app. Closing this window keeps the camera running in the system tray." />
+        </Grid>
+
+        <!-- Side panel -->
+        <Border Grid.Column="1" Background="{StaticResource PanelBrush}">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="18,4,18,18">
+                <StackPanel>
+                    <!-- Devices -->
+                    <Grid>
+                        <TextBlock Text="IPHONES ON YOUR NETWORK" Style="{StaticResource SectionHeader}" />
+                        <Button x:Name="RefreshButton" Content="Refresh" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                Padding="10,3" Margin="0,0,0,6" FontSize="11" Click="OnRefreshClick"
+                                ToolTip="Clear the list and search again" />
+                    </Grid>
+                    <ListBox x:Name="DeviceList" MaxHeight="200" MouseDoubleClick="OnDeviceDoubleClick"
+                             SelectionChanged="OnDeviceSelectionChanged">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding Endpoint}" Style="{StaticResource SubtleText}" FontSize="11" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock x:Name="NoDevicesText" Style="{StaticResource SubtleText}" FontSize="12"
+                               Text="Searching… Open the app on your iPhone. It must be on the same Wi-Fi network as this PC." />
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="ConnectButton" Content="Connect" Style="{StaticResource PrimaryButton}"
+                                IsEnabled="False" Click="OnConnectClick" />
+                        <Button x:Name="DisconnectButton" Grid.Column="2" Content="Disconnect" IsEnabled="False"
+                                Click="OnDisconnectClick" />
+                    </Grid>
+
+                    <!-- Manual IP -->
+                    <TextBlock Text="CONNECT BY IP ADDRESS" Style="{StaticResource SectionHeader}" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="IpBox" KeyDown="OnIpBoxKeyDown" ToolTip="The IP shown in the iPhone app, e.g. 192.168.1.23 (optionally :port)" />
+                        <Button Grid.Column="2" Content="Connect" Click="OnConnectIpClick" />
+                    </Grid>
+                    <TextBlock x:Name="IpError" Foreground="{StaticResource BadBrush}" FontSize="11" Margin="0,4,0,0"
+                               Visibility="Collapsed" />
+
+                    <!-- Status -->
+                    <TextBlock Text="STATUS" Style="{StaticResource SectionHeader}" />
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse x:Name="StateDot" Width="10" Height="10" Fill="{StaticResource SubtleTextBrush}" VerticalAlignment="Center" />
+                        <TextBlock x:Name="StateText" Text="Not connected" FontWeight="SemiBold" Margin="8,0,0,0" />
+                    </StackPanel>
+                    <TextBlock x:Name="MessageText" Style="{StaticResource SubtleText}" FontSize="12" Margin="18,2,0,8" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition />
+                        </Grid.RowDefinitions>
+                        <Grid.Resources>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                <Setter Property="Margin" Value="0,3" />
+                                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                            </Style>
+                        </Grid.Resources>
+                        <TextBlock Grid.Row="0" Text="Phone" Foreground="{StaticResource SubtleTextBrush}" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" x:Name="PhoneValue" Text="—" />
+                        <TextBlock Grid.Row="1" Text="Resolution" Foreground="{StaticResource SubtleTextBrush}" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="ResolutionValue" Text="—" />
+                        <TextBlock Grid.Row="2" Text="Frame rate" Foreground="{StaticResource SubtleTextBrush}" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" x:Name="FpsValue" Text="—" />
+                        <TextBlock Grid.Row="3" Text="Bitrate" Foreground="{StaticResource SubtleTextBrush}" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" x:Name="BitrateValue" Text="—" />
+                        <TextBlock Grid.Row="4" Text="Decoder" Foreground="{StaticResource SubtleTextBrush}" />
+                        <TextBlock Grid.Row="4" Grid.Column="1" x:Name="DecoderValue" Text="—" />
+                        <TextBlock Grid.Row="5" Text="Virtual camera" Foreground="{StaticResource SubtleTextBrush}" />
+                        <TextBlock Grid.Row="5" Grid.Column="1" x:Name="CameraValue" Text="—" />
+                    </Grid>
+
+                    <!-- Image -->
+                    <TextBlock Text="IMAGE" Style="{StaticResource SectionHeader}" />
+                    <CheckBox x:Name="MirrorBox" Content="Mirror horizontally" Checked="OnTransformChanged" Unchecked="OnTransformChanged" />
+                    <CheckBox x:Name="RotateBox" Content="Rotate 180°" Checked="OnTransformChanged" Unchecked="OnTransformChanged" />
+
+                    <!-- Options -->
+                    <TextBlock Text="OPTIONS" Style="{StaticResource SectionHeader}" />
+                    <CheckBox x:Name="AutoReconnectBox" Content="Reconnect automatically" Checked="OnAutoReconnectChanged" Unchecked="OnAutoReconnectChanged"
+                              ToolTip="Keep retrying when the connection drops, and reconnect to the last phone on startup" />
+                    <CheckBox x:Name="HardwareDecodeBox" Content="Decode on the GPU" Checked="OnHardwareDecodeChanged" Unchecked="OnHardwareDecodeChanged"
+                              ToolTip="Recommended for 4K. Takes effect on the next connection." />
+                    <CheckBox x:Name="AutostartBox" Content="Start with Windows (in the tray)" Checked="OnAutostartChanged" Unchecked="OnAutostartChanged" />
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</Window>

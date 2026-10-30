@@ -1,0 +1,8 @@
+windows/build/
+windows/desktop/bin/
+windows/desktop/obj/
+ios/*.xcodeproj/
+ios/build/
+xcuserdata/
+DerivedData/
+.DS_Store
