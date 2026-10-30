@@ -50,7 +50,12 @@ Choose **one** of these options. *Sideloadly* is quickest for a one-off install;
 ### Option A — from Windows with Sideloadly (no Mac needed)
 
 1. Download `IPhoneWebcam-<version>-unsigned.ipa` from the [latest release](https://github.com/liamniou/iphone-webcam/releases/latest).
-2. Install **iTunes** and **iCloud** for Windows — the versions downloaded from apple.com, *not* the Microsoft Store ones (Sideloadly needs their drivers; the Sideloadly website links to the right downloads).
+2. Install **iTunes** and **iCloud** for Windows from Apple's direct download links — *not* the Microsoft Store versions (Sideloadly needs the drivers and Apple ID components they install). If you have the Microsoft Store versions, uninstall them first.
+   - iTunes (64-bit): <https://www.apple.com/itunes/download/win64>
+   - iCloud: <https://updates.cdn-apple.com/2020/windows/001-39935-20200911-1A70AA56-F448-11EA-8CC0-99D41950005E/iCloudSetup.exe>
+     (iCloud 7.x — Apple's last standalone installer; newer versions are only in the Microsoft Store. You don't need to sign in to iCloud.)
+
+   Restart the PC after installing both.
 3. Install [Sideloadly](https://sideloadly.io/) and start it.
 4. Connect the iPhone with a USB cable, unlock it and tap **Trust** on the phone.
 5. In Sideloadly: drag the `.ipa` onto the window, select your iPhone, enter your Apple ID and click **Start**. Enter the verification code if asked.
@@ -74,8 +79,9 @@ Limits of a free Apple ID: at most **3 sideloaded apps** on the device (AltStore
 <summary><b>Step 1 — Install AltServer on your Windows PC</b> (one time)</summary>
 
 1. Install **iTunes** and **iCloud** downloaded **directly from Apple** — *not* the Microsoft Store versions (AltServer needs their device drivers and Apple ID libraries):
-   - iTunes 64-bit: <https://www.apple.com/itunes/download/win64>
-   - iCloud: the direct download link is in the [official AltStore guide](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows)
+   - iTunes (64-bit): <https://www.apple.com/itunes/download/win64>
+   - iCloud: <https://updates.cdn-apple.com/2020/windows/001-39935-20200911-1A70AA56-F448-11EA-8CC0-99D41950005E/iCloudSetup.exe>
+     (Apple's last standalone installer, as recommended by the [official AltStore guide](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows))
 
    If you already have the Microsoft Store versions, uninstall them first (or see AltStore's [troubleshooting guide](https://faq.altstore.io/altstore-classic/troubleshooting-guide) for a workaround).
 2. Download [AltServer for Windows](https://cdn.altstore.io/file/altstore/altinstaller.zip), extract `AltInstaller.zip` and run `Setup.exe`.
