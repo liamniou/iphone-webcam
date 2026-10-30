@@ -45,7 +45,7 @@ powershell -ExecutionPolicy Bypass -File .\uninstall.ps1   # removes it again
 
 Apple only allows App Store apps to be installed freely, so the app is *sideloaded*: you sign it with your own Apple ID.
 With a free Apple ID the installation is valid for **7 days**; after that, simply sideload it again (your settings stay).
-Choose **one** of these options:
+Choose **one** of these options. *Sideloadly* is quickest for a one-off install; *AltStore* takes a bit longer to set up but renews the app automatically, so you don't have to reinstall it every week.
 
 ### Option A — from Windows with Sideloadly (no Mac needed)
 
@@ -62,9 +62,91 @@ Choose **one** of these options:
 
 To renew after 7 days, repeat step 5 (or enable Sideloadly's automatic refresh).
 
-### Option B — AltStore
+### Option B — AltStore (refreshes automatically every week)
 
-[AltStore](https://altstore.io/) (with AltServer for Windows or macOS) can install the same `.ipa` and refreshes it automatically every week while your phone and PC are on the same Wi-Fi. Follow AltStore's setup guide, then in AltStore tap **My Apps → +** and pick the `.ipa`.
+[AltStore](https://altstore.io/) is an app store for sideloaded apps. A companion program, **AltServer**, runs on your computer and re-signs your apps over Wi-Fi in the background, so the 7-day limit takes care of itself as long as the PC is on and on the same Wi-Fi from time to time.
+
+> Use **AltStore Classic** (the one installed with AltServer). *AltStore PAL* (EU, Japan, Brazil) only installs notarized apps, so it can't install this `.ipa`.
+
+Limits of a free Apple ID: at most **3 sideloaded apps** on the device (AltStore itself uses one) and **10 App IDs per week** (iPhone Webcam needs one).
+
+<details open>
+<summary><b>Step 1 — Install AltServer on your Windows PC</b> (one time)</summary>
+
+1. Install **iTunes** and **iCloud** downloaded **directly from Apple** — *not* the Microsoft Store versions (AltServer needs their device drivers and Apple ID libraries):
+   - iTunes 64-bit: <https://www.apple.com/itunes/download/win64>
+   - iCloud: the direct download link is in the [official AltStore guide](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows)
+
+   If you already have the Microsoft Store versions, uninstall them first (or see AltStore's [troubleshooting guide](https://faq.altstore.io/altstore-classic/troubleshooting-guide) for a workaround).
+2. Download [AltServer for Windows](https://cdn.altstore.io/file/altstore/altinstaller.zip), extract `AltInstaller.zip` and run `Setup.exe`.
+3. Start AltServer: type **AltServer** in the Start menu search, choose **Run as administrator**. When Windows Firewall asks, **allow access on private networks**. AltServer runs as an icon in the system tray (click the `^` arrow in the taskbar if you don't see it).
+
+On a Mac, use [AltServer for macOS](https://faq.altstore.io/altstore-classic/how-to-install-altstore-macos) instead (it lives in the menu bar; the rest of this guide is the same).
+</details>
+
+<details open>
+<summary><b>Step 2 — Install AltStore on your iPhone</b> (one time)</summary>
+
+1. Connect the iPhone to the PC with a USB cable, unlock it and tap **Trust** (enter your passcode).
+2. Open **iTunes**, sign in with your Apple ID, click the phone icon, and in *Summary* enable **Sync with this iPhone over Wi-Fi**, then click **Apply**. (This lets AltServer reach the phone over Wi-Fi later.)
+3. Click the AltServer tray icon → **Install AltStore** → choose your iPhone.
+4. Enter your Apple ID email and password. They are sent only to Apple, to create the free signing certificate. (Using a separate, free Apple ID just for sideloading is fine too.)
+5. Wait for the notification *"Installation Succeeded"*. AltStore appears on the iPhone's home screen (restart the iPhone if it doesn't).
+6. On the iPhone, trust the certificate: **Settings → General → VPN & Device Management** → under *Developer App* tap your Apple ID → **Trust "…"** → **Trust**.
+7. Enable **Developer Mode** (iOS 16+): **Settings → Privacy & Security → Developer Mode** → on → **Restart**. After the restart, unlock the phone and tap **Turn On** when asked.
+   (The *Developer Mode* switch only appears after the first sideloaded app has been installed — that's why it comes after step 5.)
+</details>
+
+<details open>
+<summary><b>Step 3 — Download the iPhone Webcam app onto the iPhone</b></summary>
+
+1. On the iPhone, open **Safari** and go to <https://github.com/liamniou/iphone-webcam/releases/latest>.
+2. Under *Assets*, tap **`IPhoneWebcam-<version>-unsigned.ipa`** → **Download**. Safari saves it in the **Files** app → *On My iPhone* (or *iCloud Drive*) → **Downloads**.
+
+   *Alternatively, download it on the PC and copy it to the iPhone through iCloud Drive, or via AirDrop from a Mac.*
+</details>
+
+<details open>
+<summary><b>Step 4 — Install it with AltStore</b></summary>
+
+1. Make sure **AltServer is running on the PC** and both devices are on the **same Wi-Fi** (or connect the iPhone with the USB cable — that always works).
+2. Open **AltStore** on the iPhone. If it asks you to sign in, use the same Apple ID as in step 2 (*Settings* tab → *Sign in with Apple ID*).
+3. Go to the **My Apps** tab and tap **+** (top-left).
+4. Pick `IPhoneWebcam-<version>-unsigned.ipa` from **Downloads**.
+5. Wait while AltStore signs and installs it (a progress bar is shown; it registers one App ID for the app — you don't need to change the bundle ID). **iPhone Webcam** appears on the home screen and in *My Apps* with "Expires in 7 days".
+6. Open **iPhone Webcam** and tap **Allow** for **Camera** and for **Local Network** — the PC can't find the phone without the Local Network permission. The certificate is the same one you trusted for AltStore, so no extra trust step is needed.
+</details>
+
+<details>
+<summary><b>Keeping it working (the 7-day limit)</b></summary>
+
+- AltStore **refreshes your apps automatically** in the background when AltServer is running on the PC and the iPhone is on the same Wi-Fi. Keep AltServer running and start it when the PC starts (e.g. put an AltServer shortcut, set to *Run as administrator*, in the Startup folder: press `Win+R`, type `shell:startup`). Keep *Settings → General → Background App Refresh* on for AltStore.
+- To refresh manually: open AltStore → **My Apps** → **Refresh All** (with AltServer reachable). Do it any time before the 7 days run out; the counter restarts.
+- If the app already expired (it won't open, or iOS says it's *no longer available*): refresh it in AltStore the same way — your settings are kept.
+- If **AltStore itself** expired: click the AltServer tray icon → **Install AltStore** again (step 2.3) **without deleting AltStore first**, then tap *Refresh All*.
+</details>
+
+<details>
+<summary><b>Updating to a new version</b></summary>
+
+Download the new `.ipa` in Safari (step 3), then in AltStore → **My Apps** → **+** pick the new file. It replaces the old version and keeps its settings.
+</details>
+
+<details>
+<summary><b>AltStore troubleshooting</b></summary>
+
+| Problem | Fix |
+|---------|-----|
+| *"Could not find AltServer"* | AltServer must be running and on the same Wi-Fi. Allow AltServer through Windows Firewall (private networks), avoid guest/school/work Wi-Fi (it isolates devices), or simply plug the iPhone into the PC with USB and try again. |
+| AltServer can't see the iPhone / sign-in hangs | iTunes and iCloud must be the versions from apple.com (not the Microsoft Store) and running; run AltServer **as administrator**; re-plug the cable and tap *Trust* on the iPhone. |
+| *"Maximum number of apps"* / 3-app limit | Only 3 sideloaded apps can be active at a time, including AltStore. In *My Apps*, long-press an app → **Deactivate** to free a slot (its data is backed up; tap **ACTIVATE** later to restore it). |
+| *"Maximum number of App IDs"* | A free Apple ID can register 10 App IDs per 7 days. Wait until some expire (*My Apps → View App IDs* shows when). |
+| *"Untrusted Developer"* when opening an app | Trust the certificate: *Settings → General → VPN & Device Management*. |
+| App opens and closes immediately / *"Developer Mode required"* | Turn on *Settings → Privacy & Security → Developer Mode* and restart. |
+| The PC never finds the phone in iPhone Webcam | *Settings → Privacy & Security → Local Network* → enable **iPhone Webcam**, or use *Connect by IP address* in the desktop app. |
+
+More help: [official AltStore troubleshooting guide](https://faq.altstore.io/altstore-classic/troubleshooting-guide).
+</details>
 
 ### Option C — build with Xcode on a Mac
 
