@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Windows;
@@ -7,16 +8,39 @@ namespace IPhoneWebcam.Desktop;
 
 public partial class App : Application
 {
+    public const string RepositoryUrl = "https://github.com/liamniou/iphone-webcam";
+    public const string ReadmeUrl = RepositoryUrl + "#readme";
+
     private const string InstanceMutexName = "IPhoneWebcam.Desktop.SingleInstance";
     private const string ShowEventName = "IPhoneWebcam.Desktop.Show";
 
     private Mutex? _instanceMutex;
     private EventWaitHandle? _showEvent;
-    private Settings _settings = new();
+    private AppController? _controller;
     private MainWindow? _window;
+    private SettingsWindow? _settingsWindow;
     private TrayIcon? _tray;
     private bool _engineRunning;
     private bool _exiting;
+
+    public static new App Current => (App)Application.Current;
+
+    /// <summary>Shared state and actions (valid after startup).</summary>
+    internal static AppController Controller => Current._controller!;
+
+    internal MainWindow? MainAppWindow => _window;
+
+    public static void OpenUrl(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception)
+        {
+            // No browser available; nothing useful to do.
+        }
+    }
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -42,7 +66,8 @@ public partial class App : Application
             while (_showEvent.WaitOne() && !_exiting) Dispatcher.BeginInvoke(ShowMainWindow);
         }) { IsBackground = true, Name = "Show listener" }.Start();
 
-        _settings = Settings.Load();
+        Settings settings = Settings.Load();
+        ThemeService.Apply(settings.Theme);
 
         try
         {
@@ -58,25 +83,34 @@ public partial class App : Application
         }
         _engineRunning = true;
 
-        Engine.SetAutoReconnect(_settings.AutoReconnect);
-        Engine.SetHardwareDecode(_settings.HardwareDecode);
-        Engine.SetTransform(_settings.Mirror, _settings.Rotate180);
-        Engine.SetAutoFraming(_settings.AutoFraming, _settings.Framing / 100f);
-        Engine.SetRetouch(_settings.RednessReduction / 100f, _settings.SkinSmoothing / 100f);
+        string? cameraError = null;
+        if (dev)
+        {
+            cameraError = "disabled in --dev mode";
+        }
+        else
+        {
+            int cameraHr = Engine.StartVirtualCamera();
+            if (cameraHr < 0) cameraError = Engine.DescribeError(cameraHr);
+        }
 
-        int cameraHr = dev ? unchecked((int)0x80004004) /* E_ABORT */ : Engine.StartVirtualCamera();
-        string? cameraError = dev ? "disabled in --dev mode" : cameraHr < 0 ? Engine.DescribeError(cameraHr) : null;
-
-        _window = new MainWindow(_settings, cameraError);
-        _tray = new TrayIcon(ShowMainWindow, () => _window.DisconnectFromTray(), ExitApplication);
-        _window.StatusUpdated += status => _tray.Update(status);
+        _controller = new AppController(settings, cameraError, dev);
+        _window = new MainWindow(_controller);
+        MainWindow = _window;
         _window.HiddenToTray += OnHiddenToTray;
         _window.ExitRequested += ExitApplication;
-
-        if (_settings.ConnectOnStartup && _settings.AutoReconnect && !string.IsNullOrEmpty(_settings.LastAddress))
+        _window.SettingsRequested += ShowSettings;
+        _tray = new TrayIcon(_controller, _window, ToggleMainWindow, () => ShowSettings("General"), ExitApplication);
+        if (dev)
         {
-            Engine.Connect(_settings.LastDeviceName, _settings.LastAddress, _settings.LastPort);
+            // UI testing hook: signalling this event opens the tray menu (no input simulation needed).
+            var trayMenuEvent = new EventWaitHandle(false, EventResetMode.AutoReset, "IPhoneWebcam.Desktop.Dev.TrayMenu");
+            new Thread(() =>
+            {
+                while (trayMenuEvent.WaitOne() && !_exiting) Dispatcher.BeginInvoke(() => _tray?.ShowMenu());
+            }) { IsBackground = true, Name = "Dev tray menu listener" }.Start();
         }
+        _controller.Start();
 
         bool startMinimized = e.Args.Any(a => string.Equals(a, "--minimized", StringComparison.OrdinalIgnoreCase));
         if (startMinimized) _tray.ShowHint("iPhone Webcam", "Running in the tray. The virtual camera is available.");
@@ -85,12 +119,13 @@ public partial class App : Application
 
     private void OnHiddenToTray()
     {
-        if (_settings.TrayHintShown) return;
-        _settings.TrayHintShown = true;
-        _settings.Save();
+        Settings settings = _controller!.Settings;
+        if (settings.TrayHintShown) return;
+        settings.TrayHintShown = true;
+        settings.Save();
         _tray?.ShowHint("iPhone Webcam is still running",
-                        "The virtual camera stays available. Use the tray icon to open the window or exit, " +
-                        "or turn off \"Close to tray\" in the options.");
+                        "The virtual camera stays available. Use the tray icon to open the window or quit, " +
+                        "or turn off \"Close to tray\" in Settings.");
     }
 
     private void ShowMainWindow()
@@ -101,13 +136,38 @@ public partial class App : Application
         _window.Activate();
     }
 
+    private void ToggleMainWindow()
+    {
+        if (_window == null || _exiting) return;
+        if (_window.IsVisible && _window.WindowState != WindowState.Minimized) _window.Hide();
+        else ShowMainWindow();
+    }
+
+    private void ShowSettings(string page)
+    {
+        if (_exiting) return;
+        if (_settingsWindow == null)
+        {
+            _settingsWindow = new SettingsWindow();
+            if (_window?.IsVisible == true) _settingsWindow.Owner = _window;
+            else _settingsWindow.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        }
+        _settingsWindow.ShowPage(page);
+        _settingsWindow.Show();
+        if (_settingsWindow.WindowState == WindowState.Minimized) _settingsWindow.WindowState = WindowState.Normal;
+        _settingsWindow.Activate();
+    }
+
     private void ExitApplication()
     {
         if (_exiting) return;
         _exiting = true;
+        _settingsWindow?.Close();
         _window?.CloseForExit();
         _tray?.Dispose();
-        _settings.Save();
+        _controller?.Stop();
+        _controller?.Settings.Save();
         ShutdownEngine();
         Shutdown();
     }

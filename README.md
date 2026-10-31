@@ -171,20 +171,22 @@ More help: [official AltStore troubleshooting guide](https://faq.altstore.io/alt
 ## Using it
 
 1. Start **iPhone Webcam** on the PC and open the app on the iPhone. The PC finds the phone automatically and connects; the preview appears in the desktop app.
-   If the phone isn't found (some routers block discovery), type the IP shown in the iPhone app into *Connect by IP address*.
+   To pick another phone, use the **Device** list in the left panel. If the phone isn't found (some routers block discovery), click **Connect by IP address…** and enter the IP shown in the iPhone app.
 2. Mount the iPhone in **landscape** (either direction — the image is kept upright). The app must stay open in the foreground; the screen won't auto-lock.
 3. In your video app choose the camera **iPhone Webcam**. Apps such as Teams or Zoom usually pick 1080p/720p; in OBS or the Windows Camera app you can select 3840×2160.
 
-Closing the desktop window keeps the camera running in the **system tray** (right-click the tray icon to *Exit*); turn off **Close to tray** in the options if you'd rather have the × button exit the app. Other options: mirror, rotate 180°, automatic reconnection, GPU decoding and *Start with Windows*. The camera switch button on the iPhone toggles front/back camera.
+The desktop app follows the Windows 11 look (light or dark, matching Windows): the **left panel** holds the device and the effects, the **title bar** shows whether an app is using the camera and the received resolution/frame rate, and the **status panel** on the right (toggle with the panel button in the title bar) shows connection details. The **gear** button opens **Settings**: app theme, *Run at startup*, *Close to tray*, connect by IP, automatic reconnection, GPU decoding and camera status (Ctrl+1…4 switch between its pages).
+
+Closing the window keeps the camera running in the **system tray**; right-click the tray icon to show or hide the window, switch or disconnect the iPhone, open Settings or quit. Turn off **Close to tray** in Settings if you'd rather have the × button quit the app. The camera switch button on the iPhone toggles front/back camera.
 
 ### Auto-framing and retouch
 
 The iPhone app detects faces (Apple's Vision framework, a few times per second) and sends their positions to the PC, where the effects are applied on the GPU to the final picture — so they work in every video app.
 
-- **Auto-framing → Keep my face in frame**: the picture zooms in and smoothly pans to keep your face (or all faces) well framed, and zooms back out a couple of seconds after nobody is visible. The **Framing** slider goes from *Wide* (head and shoulders) to *Tight* (head fills the picture); zoom is limited to 3× so the 4K picture stays sharp at 1080p.
-- **Retouch → Reduce redness** evens out a red complexion; **Smooth skin** softens skin texture while keeping eyes, hair and edges sharp. Both only touch skin-coloured pixels inside the detected face area, so red clothes or objects stay as they are. (With an older iPhone app version that doesn't send face positions, retouching applies to all skin-coloured pixels.)
+- **Auto-framing**: the picture zooms in and smoothly pans to keep your face (or all faces) well framed, and zooms back out a couple of seconds after nobody is visible. The slider goes from *Wide* (head and shoulders) to *Tight* (head fills the picture); zoom is limited to 3× so the 4K picture stays sharp at 1080p.
+- **Retouch**: **Reduce redness** evens out a red complexion; **Smooth skin** softens skin texture while keeping eyes, hair and edges sharp. Both only touch skin-coloured pixels inside the detected face area, so red clothes or objects stay as they are. (With an older iPhone app version that doesn't send face positions, retouching applies to all skin-coloured pixels.)
 
-Effects need a DirectX 11 graphics card (any PC that runs Windows 11 has one); the status under *Auto-framing* shows whether a face is detected.
+Effects need a DirectX 11 graphics card (any PC that runs Windows 11 has one); the line under the *Auto-framing* slider shows whether a face is detected.
 
 ## Troubleshooting
 
@@ -258,7 +260,7 @@ git tag v1.2.3 && git push origin v1.2.3
 | Path | What |
 |------|------|
 | [ios/](ios/) | iPhone app (SwiftUI, AVFoundation, VideoToolbox, Network.framework) |
-| [windows/desktop/](windows/desktop/) | Desktop app (C# WPF, .NET 10): preview, device list, status, tray |
+| [windows/desktop/](windows/desktop/) | Desktop app (C# WPF, .NET 10, Fluent design with [WPF UI](https://github.com/lepoco/wpfui)): preview, device and effect controls, status, Settings window, tray |
 | [windows/engine/](windows/engine/) | `IPhoneWebcamEngine.dll` (C++): discovery, connection, GPU H.264 decoding, GPU effects (auto-framing, retouch), virtual camera registration, preview — C API in [IPhoneWebcamEngine.h](windows/engine/IPhoneWebcamEngine.h) |
 | [windows/source/](windows/source/) | Virtual camera media source DLL, loaded by the Windows Camera Frame Server |
 | [windows/common/SharedFrame.h](windows/common/SharedFrame.h) | Shared-memory contract between the engine and the source DLL |
@@ -276,3 +278,5 @@ type `1` = H.264 access unit (Annex B; keyframes carry SPS/PPS), type `2` = face
 ## License
 
 [Apache License 2.0](LICENSE)
+
+The desktop app uses [WPF UI](https://github.com/lepoco/wpfui) (MIT License) for its Windows 11 (Fluent) controls, Mica backdrop and theming.

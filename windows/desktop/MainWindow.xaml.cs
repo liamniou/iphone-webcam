@@ -2,93 +2,78 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
-using System.Net;
-using System.Net.Sockets;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Threading;
+using Wpf.Ui.Controls;
+using TextBlock = System.Windows.Controls.TextBlock;
 
 namespace IPhoneWebcam.Desktop;
 
-internal sealed record DeviceItem(string Name, string Address, ushort Port)
+public partial class MainWindow : FluentWindow
 {
-    public string Endpoint => $"{Address}:{Port}";
-}
-
-public partial class MainWindow : Window
-{
-    private readonly Settings _settings;
+    private readonly AppController _controller;
     private readonly WriteableBitmap _preview;
-    private readonly DispatcherTimer _statusTimer;
+    private readonly Dictionary<string, TextBlock> _statusValues = new();
     private long _lastPreviewId;
     private bool _renderingHooked;
-    private bool _userDisconnected;
     private bool _allowClose;
-    private ConnectionState _lastState = (ConnectionState)(-1);
     private bool _initializing = true;
-    private readonly DispatcherTimer _saveTimer;
+    private bool _updatingDevices;
+    private ConnectionState _lastState = (ConnectionState)(-1);
 
-    internal event Action<EngineStatus>? StatusUpdated;
     internal event Action? HiddenToTray;
     internal event Action? ExitRequested;
+    internal event Action<string>? SettingsRequested;
 
-    internal MainWindow(Settings settings, string? cameraError)
+    private Settings Settings => _controller.Settings;
+
+    internal MainWindow(AppController controller)
     {
         InitializeComponent();
-        _settings = settings;
+        _controller = controller;
+        ThemeService.Register(this);
 
+        VersionText.Text = AppController.Version + (controller.DevMode ? "  (dev)" : "");
         _preview = new WriteableBitmap(Engine.PreviewWidth, Engine.PreviewHeight, 96, 96, PixelFormats.Bgra32, null);
         PreviewImage.Source = _preview;
 
-        MirrorBox.IsChecked = settings.Mirror;
-        RotateBox.IsChecked = settings.Rotate180;
-        AutoReconnectBox.IsChecked = settings.AutoReconnect;
-        HardwareDecodeBox.IsChecked = settings.HardwareDecode;
-        AutostartBox.IsChecked = Autostart.IsEnabled;
-        CloseToTrayBox.IsChecked = settings.CloseToTray;
-        AutoFrameBox.IsChecked = settings.AutoFraming;
-        FramingSlider.Value = settings.Framing;
-        RednessSlider.Value = settings.RednessReduction;
-        SmoothingSlider.Value = settings.SkinSmoothing;
-        UpdateEffectLabels();
-        IpBox.Text = string.IsNullOrEmpty(settings.LastDeviceName) ? settings.LastAddress : "";
+        AddStatusTile("phone", SymbolRegular.Phone24, "Phone");
+        AddStatusTile("resolution", SymbolRegular.SlideSize24, "Resolution");
+        AddStatusTile("fps", SymbolRegular.TopSpeed24, "Frame rate");
+        AddStatusTile("bitrate", SymbolRegular.DataUsage24, "Bitrate");
+        AddStatusTile("decoder", SymbolRegular.BrainCircuit24, "Decoder");
+        AddStatusTile("camera", SymbolRegular.Video24, "Virtual camera");
+        AddStatusTile("faces", SymbolRegular.Person24, "Faces");
 
-        // Sliders fire many changes while dragging; write the settings file once they settle.
-        _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
-        _saveTimer.Tick += (_, _) =>
-        {
-            _saveTimer.Stop();
-            _settings.Save();
-        };
+        AutoFrameSwitch.IsChecked = Settings.AutoFraming;
+        FramingSlider.Value = Settings.Framing;
+        RetouchSwitch.IsChecked = Settings.IsRetouchOn;
+        RednessSlider.Value = Settings.RednessReduction;
+        SmoothingSlider.Value = Settings.SkinSmoothing;
+        MirrorToggle.IsChecked = Settings.Mirror;
+        RotateToggle.IsChecked = Settings.Rotate180;
+        StatusPanel.Visibility = Settings.ShowStatusPanel ? Visibility.Visible : Visibility.Collapsed;
+        UpdateEffectControls();
 
-        if (cameraError != null)
-        {
-            CameraWarning.Visibility = Visibility.Visible;
-            CameraWarningText.Text = "The virtual camera isn't available, so other apps can't see the iPhone yet. " +
-                                     "Install it by running windows\\scripts\\install.ps1 as administrator (Windows 11 is required). " +
-                                     $"Details: {cameraError}";
-        }
-
-        _statusTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(300) };
-        _statusTimer.Tick += (_, _) => Poll();
-        _statusTimer.Start();
+        CameraInfoBar.IsOpen = controller.CameraError != null;
+        CameraInfoBar.Message = controller.DevMode
+            ? "Development instance (--dev): the virtual camera isn't registered."
+            : "Other apps can't see the iPhone yet. Reinstall iPhone Webcam (Windows 11 is required). " +
+              $"Details: {controller.CameraError}";
 
         IsVisibleChanged += (_, _) => UpdatePreviewHook();
         StateChanged += (_, _) => UpdatePreviewHook();
+        controller.Updated += Refresh;
         _initializing = false;
-        Poll();
+        Refresh();
     }
-
-    /// <summary>Called by the tray menu.</summary>
-    internal void DisconnectFromTray() => Disconnect();
 
     internal void CloseForExit()
     {
         _allowClose = true;
-        _statusTimer.Stop();
+        _controller.Updated -= Refresh;
         UnhookPreview();
         Close();
     }
@@ -98,7 +83,7 @@ public partial class MainWindow : Window
         if (!_allowClose)
         {
             e.Cancel = true;
-            if (_settings.CloseToTray)
+            if (Settings.CloseToTray)
             {
                 // Keep the virtual camera running in the tray.
                 Hide();
@@ -156,93 +141,119 @@ public partial class MainWindow : Window
         }
     }
 
-    // ----- Status & devices --------------------------------------------------------------------
-
-    private void Poll()
+    private void ClearPreview()
     {
-        EngineStatus status = Engine.GetStatus();
-        UpdateDevices(status);
-        UpdateStatus(status);
-        StatusUpdated?.Invoke(status);
+        var black = new byte[Engine.PreviewWidth * Engine.PreviewHeight * 4];
+        _preview.WritePixels(new Int32Rect(0, 0, Engine.PreviewWidth, Engine.PreviewHeight), black, Engine.PreviewWidth * 4, 0);
     }
 
-    private void UpdateDevices(EngineStatus status)
+    private void OnPreviewSizeChanged(object sender, SizeChangedEventArgs e) =>
+        PreviewHost.Clip = new RectangleGeometry(new Rect(e.NewSize), 8, 8);
+
+    // ----- Status --------------------------------------------------------------------------------
+
+    private void AddStatusTile(string key, SymbolRegular symbol, string label)
     {
-        var devices = Engine.GetDevices()
-            .Select(d => new DeviceItem(d.Name, d.Address, d.Port))
-            .OrderBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase)
-            .ToList();
-
-        var current = DeviceList.Items.Cast<DeviceItem>().ToList();
-        if (!current.SequenceEqual(devices))
-        {
-            var selected = DeviceList.SelectedItem as DeviceItem;
-            DeviceList.ItemsSource = devices;
-            DeviceList.SelectedItem = devices.FirstOrDefault(d => d.Name == selected?.Name)
-                                      ?? devices.FirstOrDefault(d => d.Name == status.DeviceName);
-        }
-        if (DeviceList.SelectedItem == null && devices.Count > 0) DeviceList.SelectedIndex = 0;
-        NoDevicesText.Visibility = devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        ConnectButton.IsEnabled = DeviceList.SelectedItem != null;
-
-        // First run convenience: connect to the first phone that shows up.
-        if (status.State == ConnectionState.Idle && !_userDisconnected &&
-            string.IsNullOrEmpty(_settings.LastAddress) && devices.Count > 0)
-        {
-            Connect(devices[0].Name, devices[0].Address, devices[0].Port);
-        }
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        var icon = new SymbolIcon { Symbol = symbol, FontSize = 20, VerticalAlignment = VerticalAlignment.Center };
+        var text = new StackPanel { Margin = new Thickness(12, 0, 0, 0) };
+        var caption = new TextBlock { Text = label, FontSize = 12 };
+        caption.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+        var value = new TextBlock { Text = "—", TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 2, 0, 0) };
+        text.Children.Add(caption);
+        text.Children.Add(value);
+        Grid.SetColumn(text, 1);
+        grid.Children.Add(icon);
+        grid.Children.Add(text);
+        var tile = new Border { Child = grid, Padding = new Thickness(12, 10, 12, 10), Margin = new Thickness(0, 0, 0, 6) };
+        tile.SetResourceReference(StyleProperty, "Surface");
+        StatusTiles.Children.Add(tile);
+        _statusValues[key] = value;
     }
 
-    private void UpdateStatus(EngineStatus s)
+    private void SetStatus(string key, string value, Brush? brush = null)
     {
+        TextBlock text = _statusValues[key];
+        text.Text = value;
+        text.ToolTip = value;
+        if (brush != null) text.Foreground = brush;
+        else text.ClearValue(TextBlock.ForegroundProperty);
+    }
+
+    private Brush ResourceBrush(string key) => (Brush)FindResource(key);
+
+    private void Refresh()
+    {
+        EngineStatus s = _controller.Status;
         bool streaming = s.State == ConnectionState.Streaming && s.Width > 0;
 
-        (string state, Brush dot) = s.State switch
+        // Device card
+        (string state, string dotKey) = s.State switch
         {
-            ConnectionState.Streaming => ("Streaming", (Brush)FindResource("GoodBrush")),
-            ConnectionState.Connecting => ("Connecting…", (Brush)FindResource("WarnBrush")),
-            ConnectionState.Reconnecting => ("Reconnecting…", (Brush)FindResource("WarnBrush")),
-            _ => ("Not connected", (Brush)FindResource("SubtleTextBrush")),
+            ConnectionState.Streaming => ("Streaming", "SystemFillColorSuccessBrush"),
+            ConnectionState.Connecting => ("Connecting…", "SystemFillColorCautionBrush"),
+            ConnectionState.Reconnecting => ("Reconnecting…", "SystemFillColorCautionBrush"),
+            _ => ("Not connected", "TextFillColorTertiaryBrush"),
         };
+        string phone = !string.IsNullOrEmpty(s.DeviceName) ? s.DeviceName : s.Address;
+        DeviceTitle.Text = string.IsNullOrEmpty(phone) ? "No iPhone" : phone;
         StateText.Text = state;
-        StateDot.Fill = dot;
-        MessageText.Text = s.State == ConnectionState.Streaming ? "" : s.Message;
+        StateDot.Fill = ResourceBrush(dotKey);
+        MessageText.Text = s.State is ConnectionState.Connecting or ConnectionState.Reconnecting ? s.Message : "";
         MessageText.Visibility = string.IsNullOrEmpty(MessageText.Text) ? Visibility.Collapsed : Visibility.Visible;
 
-        string phone = !string.IsNullOrEmpty(s.DeviceName) ? $"{s.DeviceName} ({s.Address})" : s.Address;
-        PhoneValue.Text = string.IsNullOrEmpty(phone) ? "—" : phone;
-        PhoneValue.ToolTip = PhoneValue.Text;
-        ResolutionValue.Text = streaming ? $"{s.Width} × {s.Height}" : "—";
-        FpsValue.Text = streaming ? $"{s.Fps} fps" : "—";
-        BitrateValue.Text = streaming ? $"{s.BitrateKbps / 1000.0:0.0} Mbit/s" : "—";
-        DecoderValue.Text = s.State == ConnectionState.Streaming && !string.IsNullOrEmpty(s.Decoder)
-            ? (s.HardwareDecode != 0 ? $"GPU · {s.Decoder}" : s.Decoder)
-            : "—";
-        DecoderValue.ToolTip = DecoderValue.Text;
+        bool active = s.State != ConnectionState.Idle;
+        ConnectToggleButton.Icon = new SymbolIcon { Symbol = active ? SymbolRegular.PlugDisconnected24 : SymbolRegular.PlugConnected24 };
+        ConnectToggleButton.ToolTip = active ? "Disconnect" : "Connect";
+        System.Windows.Automation.AutomationProperties.SetName(ConnectToggleButton, active ? "Disconnect" : "Connect");
+        ConnectToggleButton.IsEnabled = active || DeviceCombo.SelectedItem != null || !string.IsNullOrEmpty(Settings.LastAddress);
 
-        (string camera, Brush cameraBrush) = s.Camera switch
+        UpdateDevices(s);
+
+        // Title bar badges
+        (string camera, string cameraKey) = s.Camera switch
         {
-            CameraState.InUse => ("In use by an app", (Brush)FindResource("GoodBrush")),
-            CameraState.Ready => ("Ready (not in use)", (Brush)FindResource("TextBrush")),
-            _ => ("Not installed", (Brush)FindResource("BadBrush")),
+            CameraState.InUse => ("Camera in use", "SystemFillColorSuccessBrush"),
+            CameraState.Ready => ("Camera ready", "SystemFillColorAttentionBrush"),
+            _ => ("Camera unavailable", "SystemFillColorCriticalBrush"),
         };
-        CameraValue.Text = camera;
-        CameraValue.Foreground = cameraBrush;
+        CameraPillText.Text = camera;
+        CameraDot.Fill = TryBrush(cameraKey) ?? ResourceBrush("AccentFillColorDefaultBrush");
+        FormatBadge.Visibility = streaming ? Visibility.Visible : Visibility.Collapsed;
+        FormatResolution.Text = ResolutionLabel(s.Width, s.Height);
+        FormatFps.Text = $"{s.Fps}FPS";
 
-        bool effects = s.EffectsAvailable != 0;
-        EffectsUnavailableText.Visibility = effects ? Visibility.Collapsed : Visibility.Visible;
-        AutoFrameBox.IsEnabled = FramingSlider.IsEnabled = RednessSlider.IsEnabled = SmoothingSlider.IsEnabled = effects;
-        FaceStatusText.Text = !streaming ? ""
-            : s.Faces < 0 ? "Face detection needs the latest iPhone app; retouch applies to all skin tones."
+        // Status panel
+        SetStatus("phone", string.IsNullOrEmpty(phone) ? "—" : string.IsNullOrEmpty(s.DeviceName) ? s.Address : $"{s.DeviceName} ({s.Address})");
+        SetStatus("resolution", streaming ? $"{s.Width} × {s.Height}" : "—");
+        SetStatus("fps", streaming ? $"{s.Fps} fps" : "—");
+        SetStatus("bitrate", streaming ? $"{s.BitrateKbps / 1000.0:0.0} Mbit/s" : "—");
+        SetStatus("decoder", streaming && !string.IsNullOrEmpty(s.Decoder)
+            ? (s.HardwareDecode != 0 ? $"GPU · {s.Decoder}" : s.Decoder) : "—");
+        SetStatus("camera", s.Camera switch
+        {
+            CameraState.InUse => "In use by an app",
+            CameraState.Ready => "Ready (not in use)",
+            _ => "Not available",
+        }, s.Camera == CameraState.Unavailable ? ResourceBrush("SystemFillColorCriticalBrush") : null);
+        SetStatus("faces", !streaming ? "—" : s.Faces < 0 ? "Not sent by this iPhone app" : s.Faces == 0 ? "None" : s.Faces.ToString());
+
+        // Effects
+        EffectsInfoBar.IsOpen = s.EffectsAvailable == 0;
+        AutoFrameSwitch.IsEnabled = RetouchSwitch.IsEnabled = s.EffectsAvailable != 0;
+        UpdateEffectControls();
+        FaceStatus.Visibility = streaming ? Visibility.Visible : Visibility.Collapsed;
+        FaceStatusText.Text = s.Faces < 0 ? "Update the iPhone app to enable face detection"
             : s.Faces == 0 ? "No face detected"
             : s.Faces == 1 ? "Face detected"
             : $"{s.Faces} faces detected";
-        FaceStatusText.Visibility = string.IsNullOrEmpty(FaceStatusText.Text) ? Visibility.Collapsed : Visibility.Visible;
+        FaceStatusIcon.Symbol = s.Faces > 1 ? SymbolRegular.People24 : SymbolRegular.Person24;
 
-        DisconnectButton.IsEnabled = s.State != ConnectionState.Idle;
+        // Preview overlay
         LiveBadge.Visibility = streaming ? Visibility.Visible : Visibility.Collapsed;
         Overlay.Visibility = streaming ? Visibility.Collapsed : Visibility.Visible;
-
         if (s.State != _lastState)
         {
             _lastState = s.State;
@@ -258,185 +269,133 @@ public partial class MainWindow : Window
                 _ => "No iPhone connected",
             };
             OverlayText.Text = s.State == ConnectionState.Idle
-                ? "Open the iPhone Webcam app on your iPhone and make sure both devices are on the same Wi-Fi."
+                ? "Open the iPhone Webcam app on your iPhone. Both devices need to be on the same Wi-Fi."
                 : s.Message;
         }
     }
 
-    private void ClearPreview()
+    private Brush? TryBrush(string key) => TryFindResource(key) as Brush;
+
+    private static string ResolutionLabel(int width, int height) => height switch
     {
-        var black = new byte[Engine.PreviewWidth * Engine.PreviewHeight * 4];
-        _preview.WritePixels(new Int32Rect(0, 0, Engine.PreviewWidth, Engine.PreviewHeight), black, Engine.PreviewWidth * 4, 0);
+        >= 2160 => "4K",
+        >= 1440 => "1440p",
+        >= 1080 => "1080p",
+        >= 720 => "720p",
+        > 0 => $"{height}p",
+        _ => "",
+    };
+
+    private void UpdateDevices(EngineStatus s)
+    {
+        var devices = _controller.Devices;
+        var current = DeviceCombo.ItemsSource as IReadOnlyList<DeviceItem>;
+        _updatingDevices = true;
+        try
+        {
+            if (current == null || !current.SequenceEqual(devices)) DeviceCombo.ItemsSource = devices;
+            DeviceItem? connected = devices.FirstOrDefault(d => _controller.IsConnectedTo(d));
+            if (!DeviceCombo.IsDropDownOpen && !Equals(DeviceCombo.SelectedItem, connected))
+            {
+                DeviceCombo.SelectedItem = connected;
+            }
+        }
+        finally
+        {
+            _updatingDevices = false;
+        }
+        DevicePlaceholder.Text = devices.Count == 0 ? "Searching for iPhones…" : "Select a device…";
+        DevicePlaceholder.Visibility = DeviceCombo.SelectedItem == null ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void UpdateEffectControls()
+    {
+        FramingSlider.IsEnabled = AutoFrameSwitch.IsChecked == true && AutoFrameSwitch.IsEnabled;
+        RednessSlider.IsEnabled = SmoothingSlider.IsEnabled = RetouchSwitch.IsChecked == true && RetouchSwitch.IsEnabled;
+        RednessValue.Text = $"{RednessSlider.Value:0} %";
+        SmoothingValue.Text = $"{SmoothingSlider.Value:0} %";
     }
 
     // ----- Actions -----------------------------------------------------------------------------
 
-    private void Connect(string name, string address, ushort port)
+    private void OnDeviceSelected(object sender, SelectionChangedEventArgs e)
     {
-        _userDisconnected = false;
-        _settings.LastDeviceName = name;
-        _settings.LastAddress = address;
-        _settings.LastPort = port;
-        _settings.ConnectOnStartup = true;
-        _settings.Save();
-        Engine.Connect(name, address, port);
-        Poll();
-    }
-
-    private void Disconnect()
-    {
-        _userDisconnected = true;
-        _settings.ConnectOnStartup = false;
-        _settings.Save();
-        Engine.Disconnect();
-        Poll();
-    }
-
-    private void ConnectSelected()
-    {
-        if (DeviceList.SelectedItem is DeviceItem device) Connect(device.Name, device.Address, device.Port);
-    }
-
-    private void OnConnectClick(object sender, RoutedEventArgs e) => ConnectSelected();
-
-    private void OnDeviceDoubleClick(object sender, MouseButtonEventArgs e) => ConnectSelected();
-
-    private void OnDeviceSelectionChanged(object sender, SelectionChangedEventArgs e) =>
-        ConnectButton.IsEnabled = DeviceList.SelectedItem != null;
-
-    private void OnDisconnectClick(object sender, RoutedEventArgs e) => Disconnect();
-
-    private void OnRefreshClick(object sender, RoutedEventArgs e)
-    {
-        Engine.RefreshDevices();
-        DeviceList.ItemsSource = new List<DeviceItem>();
-    }
-
-    private void OnConnectIpClick(object sender, RoutedEventArgs e) => ConnectToTypedAddress();
-
-    private void OnIpBoxKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter) ConnectToTypedAddress();
-    }
-
-    private void ConnectToTypedAddress()
-    {
-        string text = IpBox.Text.Trim();
-        ushort port = Engine.DefaultPort;
-        int colon = text.LastIndexOf(':');
-        if (colon > 0)
+        if (_updatingDevices || _initializing) return;
+        if (DeviceCombo.SelectedItem is DeviceItem device && !_controller.IsConnectedTo(device))
         {
-            if (!ushort.TryParse(text[(colon + 1)..], out port) || port == 0)
-            {
-                ShowIpError("Invalid port number.");
-                return;
-            }
-            text = text[..colon];
+            _controller.Connect(device);
         }
-        if (!IPAddress.TryParse(text, out IPAddress? ip) || ip.AddressFamily != AddressFamily.InterNetwork)
+    }
+
+    private void OnConnectToggleClick(object sender, RoutedEventArgs e)
+    {
+        if (_controller.Status.State != ConnectionState.Idle)
         {
-            ShowIpError("Enter an IPv4 address like 192.168.1.23 (shown in the iPhone app).");
-            return;
+            _controller.Disconnect();
         }
-        IpError.Visibility = Visibility.Collapsed;
-        Connect("", ip.ToString(), port);
+        else if (DeviceCombo.SelectedItem is DeviceItem device)
+        {
+            _controller.Connect(device);
+        }
+        else if (!string.IsNullOrEmpty(Settings.LastAddress))
+        {
+            _controller.Connect(Settings.LastDeviceName, Settings.LastAddress, Settings.LastPort);
+        }
     }
 
-    private void ShowIpError(string message)
+    private void OnRefreshClick(object sender, RoutedEventArgs e) => _controller.RefreshDevices();
+
+    private void OnConnectByIpClick(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke("Devices");
+
+    private void OnSettingsClick(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke("General");
+
+    private void OnStatusPanelClick(object sender, RoutedEventArgs e)
     {
-        IpError.Text = message;
-        IpError.Visibility = Visibility.Visible;
+        Settings.ShowStatusPanel = StatusPanel.Visibility != Visibility.Visible;
+        StatusPanel.Visibility = Settings.ShowStatusPanel ? Visibility.Visible : Visibility.Collapsed;
+        _controller.ScheduleSave();
     }
 
-    private void OnTransformChanged(object sender, RoutedEventArgs e)
-    {
-        if (_initializing) return;
-        _settings.Mirror = MirrorBox.IsChecked == true;
-        _settings.Rotate180 = RotateBox.IsChecked == true;
-        _settings.Save();
-        Engine.SetTransform(_settings.Mirror, _settings.Rotate180);
-    }
-
-    private void OnAutoReconnectChanged(object sender, RoutedEventArgs e)
-    {
-        if (_initializing) return;
-        _settings.AutoReconnect = AutoReconnectBox.IsChecked == true;
-        _settings.Save();
-        Engine.SetAutoReconnect(_settings.AutoReconnect);
-    }
+    internal void SetStatusPanelVisible(bool visible) =>
+        StatusPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
 
     private void OnAutoFramingChanged(object sender, RoutedEventArgs e)
     {
         if (_initializing) return;
-        _settings.AutoFraming = AutoFrameBox.IsChecked == true;
-        ApplyEffects();
+        Settings.AutoFraming = AutoFrameSwitch.IsChecked == true;
+        UpdateEffectControls();
+        _controller.ApplyEffects();
     }
 
     private void OnFramingChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_initializing) return;
-        _settings.Framing = (int)Math.Round(FramingSlider.Value);
-        ApplyEffects();
+        Settings.Framing = (int)Math.Round(FramingSlider.Value);
+        _controller.ApplyEffects();
     }
 
-    private void OnRetouchChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    private void OnRetouchChanged(object sender, RoutedEventArgs e)
     {
         if (_initializing) return;
-        _settings.RednessReduction = (int)Math.Round(RednessSlider.Value);
-        _settings.SkinSmoothing = (int)Math.Round(SmoothingSlider.Value);
-        ApplyEffects();
+        Settings.RetouchEnabled = RetouchSwitch.IsChecked == true;
+        UpdateEffectControls();
+        _controller.ApplyEffects();
     }
 
-    private void ApplyEffects()
-    {
-        UpdateEffectLabels();
-        Engine.SetAutoFraming(_settings.AutoFraming, _settings.Framing / 100f);
-        Engine.SetRetouch(_settings.RednessReduction / 100f, _settings.SkinSmoothing / 100f);
-        _saveTimer.Stop();
-        _saveTimer.Start();
-    }
-
-    private void UpdateEffectLabels()
-    {
-        FramingValue.Text = FramingSlider.Value switch
-        {
-            < 25 => "Wide",
-            < 75 => "Medium",
-            _ => "Tight",
-        };
-        RednessValue.Text = RednessSlider.Value < 0.5 ? "Off" : $"{RednessSlider.Value:0} %";
-        SmoothingValue.Text = SmoothingSlider.Value < 0.5 ? "Off" : $"{SmoothingSlider.Value:0} %";
-    }
-
-    private void OnCloseToTrayChanged(object sender, RoutedEventArgs e)
+    private void OnRetouchSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_initializing) return;
-        _settings.CloseToTray = CloseToTrayBox.IsChecked == true;
-        _settings.Save();
+        Settings.RednessReduction = (int)Math.Round(RednessSlider.Value);
+        Settings.SkinSmoothing = (int)Math.Round(SmoothingSlider.Value);
+        UpdateEffectControls();
+        _controller.ApplyEffects();
     }
 
-    private void OnHardwareDecodeChanged(object sender, RoutedEventArgs e)
+    private void OnTransformChanged(object sender, RoutedEventArgs e)
     {
         if (_initializing) return;
-        _settings.HardwareDecode = HardwareDecodeBox.IsChecked == true;
-        _settings.Save();
-        Engine.SetHardwareDecode(_settings.HardwareDecode);
-    }
-
-    private void OnAutostartChanged(object sender, RoutedEventArgs e)
-    {
-        if (_initializing) return;
-        bool wanted = AutostartBox.IsChecked == true;
-        if (wanted == Autostart.IsEnabled) return;
-        try
-        {
-            Autostart.Set(wanted);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, $"Couldn't change the startup setting: {ex.Message}", "iPhone Webcam",
-                            MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-        AutostartBox.IsChecked = Autostart.IsEnabled;
+        Settings.Mirror = MirrorToggle.IsChecked == true;
+        Settings.Rotate180 = RotateToggle.IsChecked == true;
+        _controller.ApplyEffects();
     }
 }

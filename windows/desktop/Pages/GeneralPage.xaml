@@ -1,0 +1,58 @@
+<Page x:Class="IPhoneWebcam.Desktop.Pages.GeneralPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="General">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="32,20,32,32" MaxWidth="1000">
+            <TextBlock Text="General" FontSize="28" FontWeight="SemiBold" Margin="0,0,0,20" />
+
+            <ui:CardControl Icon="{ui:SymbolIcon Color24}" Margin="0,0,0,4">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="App theme" />
+                        <TextBlock Text="Select which app theme to display." Style="{StaticResource SecondaryText}" />
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ComboBox x:Name="ThemeCombo" MinWidth="180" SelectionChanged="OnThemeChanged">
+                    <ComboBoxItem Content="System" Tag="System" />
+                    <ComboBoxItem Content="Light" Tag="Light" />
+                    <ComboBoxItem Content="Dark" Tag="Dark" />
+                </ComboBox>
+            </ui:CardControl>
+
+            <ui:CardControl Icon="{ui:SymbolIcon PanelRight24}" Margin="0,0,0,4">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="Status panel" />
+                        <TextBlock Text="Show connection details next to the preview." Style="{StaticResource SecondaryText}" />
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:ToggleSwitch x:Name="StatusPanelSwitch" Checked="OnStatusPanelChanged" Unchecked="OnStatusPanelChanged" />
+            </ui:CardControl>
+
+            <TextBlock Text="Startup and closing" FontSize="16" FontWeight="SemiBold" Margin="0,24,0,10" />
+
+            <ui:CardControl Icon="{ui:SymbolIcon Power24}" Margin="0,0,0,4">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="Run at startup" />
+                        <TextBlock Text="Start iPhone Webcam in the system tray when you sign in to Windows." Style="{StaticResource SecondaryText}" />
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:ToggleSwitch x:Name="StartupSwitch" Checked="OnStartupChanged" Unchecked="OnStartupChanged" />
+            </ui:CardControl>
+
+            <ui:CardControl Icon="{ui:SymbolIcon ArrowMinimize24}" Margin="0,0,0,4">
+                <ui:CardControl.Header>
+                    <StackPanel>
+                        <TextBlock Text="Close to tray" />
+                        <TextBlock Text="Keep the virtual camera running in the system tray when you close the window. When off, closing the window exits the app."
+                                   Style="{StaticResource SecondaryText}" />
+                    </StackPanel>
+                </ui:CardControl.Header>
+                <ui:ToggleSwitch x:Name="CloseToTraySwitch" Checked="OnCloseToTrayChanged" Unchecked="OnCloseToTrayChanged" />
+            </ui:CardControl>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

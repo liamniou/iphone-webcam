@@ -24,4 +24,9 @@
     <Resource Include="Assets\AppIcon.ico" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Fluent (Windows 11) controls, Mica and theming: https://github.com/lepoco/wpfui (MIT). -->
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
+  </ItemGroup>
+
 </Project>

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace IPhoneWebcam.Desktop;
 
@@ -19,13 +20,22 @@ internal sealed class Settings
     public bool AutoFraming { get; set; }
     /// <summary>0 = wide, 100 = tight.</summary>
     public int Framing { get; set; } = 50;
+    /// <summary>Retouch on/off; the strengths below are kept when it's switched off.
+    /// Null in settings from version 1.1, where retouch was on whenever a strength was above 0.</summary>
+    public bool? RetouchEnabled { get; set; }
     /// <summary>0..100 %.</summary>
-    public int RednessReduction { get; set; }
+    public int RednessReduction { get; set; } = 50;
     /// <summary>0..100 %.</summary>
-    public int SkinSmoothing { get; set; }
+    public int SkinSmoothing { get; set; } = 30;
     /// <summary>Closing the window hides it to the tray (true) or exits the app (false).</summary>
     public bool CloseToTray { get; set; } = true;
+    /// <summary>"System", "Light" or "Dark".</summary>
+    public string Theme { get; set; } = "System";
+    public bool ShowStatusPanel { get; set; } = true;
     public bool TrayHintShown { get; set; }
+
+    [JsonIgnore]
+    public bool IsRetouchOn => RetouchEnabled ?? (RednessReduction > 0 || SkinSmoothing > 0);
 
     private static string FilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "IPhoneWebcam", "settings.json");
@@ -49,7 +59,7 @@ internal sealed class Settings
         {
             // Corrupt or unreadable settings: start with defaults.
         }
-        return new Settings();
+        return new Settings { RetouchEnabled = false };
     }
 
     public void Save()
