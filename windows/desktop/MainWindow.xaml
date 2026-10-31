@@ -21,7 +21,7 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
                     <TextBlock Text="iPhone Webcam" FontSize="14" VerticalAlignment="Center" />
                     <TextBlock x:Name="VersionText" Margin="8,1,0,0" FontSize="12" VerticalAlignment="Center"
-                               Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                 </StackPanel>
             </ui:TitleBar.Header>
             <ui:TitleBar.CenterContent>
@@ -73,7 +73,7 @@
                     <StackPanel Margin="12,12,12,16">
 
                         <!-- Current device -->
-                        <Border Style="{StaticResource Surface}" Padding="14,12">
+                        <Border x:Name="DeviceCard" Style="{StaticResource Surface}" Padding="14,12">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
@@ -85,7 +85,7 @@
                                     <TextBlock x:Name="DeviceTitle" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                                     <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
                                         <Ellipse x:Name="StateDot" Width="8" Height="8" VerticalAlignment="Center" />
-                                        <TextBlock x:Name="StateText" Margin="6,0,0,0" FontSize="12"
+                                        <TextBlock x:Name="StateText" Margin="6,0,0,0" FontSize="12" TextTrimming="CharacterEllipsis"
                                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                     </StackPanel>
                                 </StackPanel>
@@ -93,7 +93,6 @@
                                            Click="OnConnectToggleClick" />
                             </Grid>
                         </Border>
-                        <TextBlock x:Name="MessageText" Style="{StaticResource SecondaryText}" Margin="2,8,0,0" />
 
                         <!-- Device picker -->
                         <TextBlock Text="Device" Style="{StaticResource SectionLabel}" Margin="2,14,0,6" />
@@ -108,7 +107,7 @@
                                         <StackPanel>
                                             <TextBlock Text="{Binding Name}" />
                                             <TextBlock Text="{Binding Endpoint}" FontSize="11"
-                                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                         </StackPanel>
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
@@ -136,8 +135,8 @@
                                 IsMoveToPointEnabled="True" ValueChanged="OnFramingChanged"
                                 ToolTip="Wide: head and shoulders. Tight: head fills the picture." />
                         <Grid Margin="2,0,2,0">
-                            <TextBlock Text="Wide" FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
-                            <TextBlock Text="Tight" FontSize="11" HorizontalAlignment="Right" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                            <TextBlock Text="Wide" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            <TextBlock Text="Tight" FontSize="12" HorizontalAlignment="Right" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                         </Grid>
                         <StackPanel x:Name="FaceStatus" Orientation="Horizontal" Margin="2,8,0,0">
                             <ui:SymbolIcon x:Name="FaceStatusIcon" Symbol="Person24" FontSize="14" VerticalAlignment="Center" />
@@ -154,17 +153,17 @@
                                              Checked="OnRetouchChanged" Unchecked="OnRetouchChanged" />
                         </Grid>
                         <Grid Margin="2,12,2,0">
-                            <TextBlock Text="Reduce redness" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                            <TextBlock x:Name="RednessValue" FontSize="12" HorizontalAlignment="Right"
-                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                            <TextBlock Text="Reduce redness" />
+                            <TextBlock x:Name="RednessValue" HorizontalAlignment="Right"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                         </Grid>
                         <Slider x:Name="RednessSlider" Minimum="0" Maximum="100" SmallChange="5" LargeChange="10"
                                 IsMoveToPointEnabled="True" ValueChanged="OnRetouchSliderChanged"
                                 ToolTip="Evens out a red complexion (only skin tones on your face are changed)" />
                         <Grid Margin="2,8,2,0">
-                            <TextBlock Text="Smooth skin" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                            <TextBlock x:Name="SmoothingValue" FontSize="12" HorizontalAlignment="Right"
-                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                            <TextBlock Text="Smooth skin" />
+                            <TextBlock x:Name="SmoothingValue" HorizontalAlignment="Right"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                         </Grid>
                         <Slider x:Name="SmoothingSlider" Minimum="0" Maximum="100" SmallChange="5" LargeChange="10"
                                 IsMoveToPointEnabled="True" ValueChanged="OnRetouchSliderChanged"
@@ -173,23 +172,23 @@
                         <Border Style="{StaticResource PanelDivider}" />
 
                         <!-- Image -->
-                        <TextBlock Text="Image" Style="{StaticResource SectionLabel}" Margin="2,0,0,8" />
-                        <UniformGrid Columns="2">
-                            <ToggleButton x:Name="MirrorToggle" Style="{StaticResource SegmentToggle}" Margin="0,0,3,0"
-                                          ToolTip="Mirror the picture horizontally" Checked="OnTransformChanged" Unchecked="OnTransformChanged">
-                                <StackPanel Orientation="Horizontal">
-                                    <ui:SymbolIcon Symbol="FlipHorizontal24" FontSize="16" />
-                                    <TextBlock Text="Mirror" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </ToggleButton>
-                            <ToggleButton x:Name="RotateToggle" Style="{StaticResource SegmentToggle}" Margin="3,0,0,0"
-                                          ToolTip="Turn the picture upside down" Checked="OnTransformChanged" Unchecked="OnTransformChanged">
-                                <StackPanel Orientation="Horizontal">
-                                    <ui:SymbolIcon Symbol="ArrowRotateClockwise24" FontSize="16" />
-                                    <TextBlock Text="Rotate 180°" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </ToggleButton>
-                        </UniformGrid>
+                        <TextBlock Text="Image" Style="{StaticResource SectionLabel}" Margin="2,0,0,4" />
+                        <Grid Margin="2,4,0,0" ToolTip="Mirror the picture horizontally">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:SymbolIcon Symbol="FlipHorizontal24" FontSize="16" />
+                                <TextBlock Text="Mirror" Margin="10,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <ui:ToggleSwitch x:Name="MirrorToggle" HorizontalAlignment="Right" AutomationProperties.Name="Mirror"
+                                             Checked="OnTransformChanged" Unchecked="OnTransformChanged" />
+                        </Grid>
+                        <Grid Margin="2,10,0,0" ToolTip="Turn the picture upside down">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:SymbolIcon Symbol="ArrowRotateClockwise24" FontSize="16" />
+                                <TextBlock Text="Rotate 180°" Margin="10,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <ui:ToggleSwitch x:Name="RotateToggle" HorizontalAlignment="Right" AutomationProperties.Name="Rotate 180°"
+                                             Checked="OnTransformChanged" Unchecked="OnTransformChanged" />
+                        </Grid>
 
                         <ui:InfoBar x:Name="EffectsInfoBar" Margin="0,14,0,0" Severity="Warning" IsClosable="False"
                                     Title="Effects unavailable"

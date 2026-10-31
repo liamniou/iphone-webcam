@@ -195,14 +195,14 @@ public partial class MainWindow : FluentWindow
             ConnectionState.Streaming => ("Streaming", "SystemFillColorSuccessBrush"),
             ConnectionState.Connecting => ("Connecting…", "SystemFillColorCautionBrush"),
             ConnectionState.Reconnecting => ("Reconnecting…", "SystemFillColorCautionBrush"),
-            _ => ("Not connected", "TextFillColorTertiaryBrush"),
+            _ => ("Not connected", "TextFillColorSecondaryBrush"),
         };
         string phone = !string.IsNullOrEmpty(s.DeviceName) ? s.DeviceName : s.Address;
         DeviceTitle.Text = string.IsNullOrEmpty(phone) ? "No iPhone" : phone;
         StateText.Text = state;
         StateDot.Fill = ResourceBrush(dotKey);
-        MessageText.Text = s.State is ConnectionState.Connecting or ConnectionState.Reconnecting ? s.Message : "";
-        MessageText.Visibility = string.IsNullOrEmpty(MessageText.Text) ? Visibility.Collapsed : Visibility.Visible;
+        // Details ("Can't reach ...") go into a tooltip and the preview overlay, so the panel layout never shifts.
+        DeviceCard.ToolTip = s.State is ConnectionState.Connecting or ConnectionState.Reconnecting ? s.Message : null;
 
         bool active = s.State != ConnectionState.Idle;
         ConnectToggleButton.Icon = new SymbolIcon { Symbol = active ? SymbolRegular.PlugDisconnected24 : SymbolRegular.PlugConnected24 };
@@ -244,7 +244,7 @@ public partial class MainWindow : FluentWindow
         EffectsInfoBar.IsOpen = s.EffectsAvailable == 0;
         AutoFrameSwitch.IsEnabled = RetouchSwitch.IsEnabled = s.EffectsAvailable != 0;
         UpdateEffectControls();
-        FaceStatus.Visibility = streaming ? Visibility.Visible : Visibility.Collapsed;
+        FaceStatus.Visibility = streaming ? Visibility.Visible : Visibility.Hidden; // keep its space
         FaceStatusText.Text = s.Faces < 0 ? "Update the iPhone app to enable face detection"
             : s.Faces == 0 ? "No face detected"
             : s.Faces == 1 ? "Face detected"
