@@ -90,6 +90,8 @@ public partial class App : Application
         }
         else
         {
+            // The camera offers the chosen format, so set it before registering the camera.
+            AppController.ApplyFormat(VideoFormat.FromId(settings.OutputFormat));
             int cameraHr = Engine.StartVirtualCamera();
             if (cameraHr < 0) cameraError = Engine.DescribeError(cameraHr);
         }

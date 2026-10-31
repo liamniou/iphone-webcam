@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Wpf.Ui.Controls;
+using MenuItem = System.Windows.Controls.MenuItem;
 using TextBlock = System.Windows.Controls.TextBlock;
 
 namespace IPhoneWebcam.Desktop;
@@ -221,9 +222,7 @@ public partial class MainWindow : FluentWindow
         };
         CameraPillText.Text = camera;
         CameraDot.Fill = TryBrush(cameraKey) ?? ResourceBrush("AccentFillColorDefaultBrush");
-        FormatBadge.Visibility = streaming ? Visibility.Visible : Visibility.Collapsed;
-        FormatResolution.Text = ResolutionLabel(s.Width, s.Height);
-        FormatFps.Text = $"{s.Fps}FPS";
+        UpdateFormatButton(s, streaming);
 
         // Status panel
         SetStatus("phone", string.IsNullOrEmpty(phone) ? "—" : string.IsNullOrEmpty(s.DeviceName) ? s.Address : $"{s.DeviceName} ({s.Address})");
@@ -242,14 +241,32 @@ public partial class MainWindow : FluentWindow
 
         // Effects
         EffectsInfoBar.IsOpen = s.EffectsAvailable == 0;
-        AutoFrameSwitch.IsEnabled = RetouchSwitch.IsEnabled = s.EffectsAvailable != 0;
+        bool effects = s.EffectsAvailable != 0;
+        AutoFrameSwitch.IsEnabled = RetouchSwitch.IsEnabled = FrameOnceButton.IsEnabled = ResetFramingButton.IsEnabled = effects;
+        if (AutoFrameSwitch.IsChecked != Settings.AutoFraming)
+        {
+            // "Frame me" / "Reset" turn following off.
+            _initializing = true;
+            AutoFrameSwitch.IsChecked = Settings.AutoFraming;
+            _initializing = false;
+        }
+        FrameOnceButton.IsEnabled = effects && streaming && s.Faces != 0;
         UpdateEffectControls();
         FaceStatus.Visibility = streaming ? Visibility.Visible : Visibility.Hidden; // keep its space
-        FaceStatusText.Text = s.Faces < 0 ? "Update the iPhone app to enable face detection"
-            : s.Faces == 0 ? "No face detected"
-            : s.Faces == 1 ? "Face detected"
-            : $"{s.Faces} faces detected";
-        FaceStatusIcon.Symbol = s.Faces > 1 ? SymbolRegular.People24 : SymbolRegular.Person24;
+        string faces = s.Faces == 0 ? "No face detected" : s.Faces == 1 ? "Face detected" : $"{s.Faces} faces detected";
+        FaceStatusText.Text = s.Faces < 0 ? "Update the iPhone app to enable face detection" : s.Framing switch
+        {
+            FramingState.Pending => "Looking for your face…",
+            FramingState.Hold => "Framed. Reset zooms back out.",
+            FramingState.Follow => s.Faces == 0 ? "Following: no face detected" : "Following your face",
+            _ => faces,
+        };
+        FaceStatusIcon.Symbol = s.Framing switch
+        {
+            FramingState.Hold => SymbolRegular.ZoomFit24,
+            FramingState.Follow => SymbolRegular.PersonSquare24,
+            _ => s.Faces > 1 ? SymbolRegular.People24 : SymbolRegular.Person24,
+        };
 
         // Preview overlay
         LiveBadge.Visibility = streaming ? Visibility.Visible : Visibility.Collapsed;
@@ -276,16 +293,6 @@ public partial class MainWindow : FluentWindow
 
     private Brush? TryBrush(string key) => TryFindResource(key) as Brush;
 
-    private static string ResolutionLabel(int width, int height) => height switch
-    {
-        >= 2160 => "4K",
-        >= 1440 => "1440p",
-        >= 1080 => "1080p",
-        >= 720 => "720p",
-        > 0 => $"{height}p",
-        _ => "",
-    };
-
     private void UpdateDevices(EngineStatus s)
     {
         var devices = _controller.Devices;
@@ -310,10 +317,51 @@ public partial class MainWindow : FluentWindow
 
     private void UpdateEffectControls()
     {
-        FramingSlider.IsEnabled = AutoFrameSwitch.IsChecked == true && AutoFrameSwitch.IsEnabled;
+        FramingSlider.IsEnabled = AutoFrameSwitch.IsEnabled;
         RednessSlider.IsEnabled = SmoothingSlider.IsEnabled = RetouchSwitch.IsChecked == true && RetouchSwitch.IsEnabled;
         RednessValue.Text = $"{RednessSlider.Value:0} %";
         SmoothingValue.Text = $"{SmoothingSlider.Value:0} %";
+    }
+
+    private void UpdateFormatButton(EngineStatus s, bool streaming)
+    {
+        VideoFormat format = _controller.Format;
+        FormatResolution.Text = format.ShortResolution;
+        FormatFps.Text = $"{format.Fps}FPS";
+        string tooltip = $"Camera format: {format.Label}. Click to change.";
+        if (streaming && (s.Height != format.Height || s.Fps < format.Fps - 5))
+        {
+            tooltip += $"\nThe iPhone currently sends {s.Width}×{s.Height} at {s.Fps} fps " +
+                       "(update the iPhone app, or this camera doesn't support the chosen format).";
+        }
+        FormatButton.ToolTip = tooltip;
+    }
+
+    private void OnFormatButtonClick(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu { PlacementTarget = FormatButton, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
+        menu.Items.Add(new MenuItem { Header = "Resolution", IsEnabled = false });
+        foreach (VideoFormat format in VideoFormat.All)
+        {
+            bool current = format.Id == _controller.Format.Id;
+            var item = new MenuItem
+            {
+                Header = format.Label,
+                ToolTip = format.Description,
+                Icon = new SymbolIcon { Symbol = current ? SymbolRegular.Checkmark24 : SymbolRegular.Video24, FontSize = 16 },
+                FontWeight = current ? FontWeights.SemiBold : FontWeights.Normal,
+            };
+            item.Click += (_, _) => _controller.SetFormat(format);
+            menu.Items.Add(item);
+        }
+        menu.Items.Add(new Separator());
+        menu.Items.Add(new MenuItem
+        {
+            Header = "Apps already using the camera switch after\nthey turn their camera off and on.",
+            IsEnabled = false,
+            FontSize = 11,
+        });
+        menu.IsOpen = true;
     }
 
     // ----- Actions -----------------------------------------------------------------------------
@@ -364,7 +412,7 @@ public partial class MainWindow : FluentWindow
         if (_initializing) return;
         Settings.AutoFraming = AutoFrameSwitch.IsChecked == true;
         UpdateEffectControls();
-        _controller.ApplyEffects();
+        _controller.ApplyEffects(); // switching following off returns to the full picture
     }
 
     private void OnFramingChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -372,7 +420,13 @@ public partial class MainWindow : FluentWindow
         if (_initializing) return;
         Settings.Framing = (int)Math.Round(FramingSlider.Value);
         _controller.ApplyEffects();
+        // A framing made with "Frame me" is redone at the new tightness.
+        if (_controller.Status.Framing == FramingState.Hold) _controller.FrameOnce();
     }
+
+    private void OnFrameOnceClick(object sender, RoutedEventArgs e) => _controller.FrameOnce();
+
+    private void OnResetFramingClick(object sender, RoutedEventArgs e) => _controller.ResetFraming();
 
     private void OnRetouchChanged(object sender, RoutedEventArgs e)
     {

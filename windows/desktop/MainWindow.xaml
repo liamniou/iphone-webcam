@@ -34,17 +34,18 @@
                             <TextBlock x:Name="CameraPillText" Margin="8,0,0,0" FontSize="12" VerticalAlignment="Center" />
                         </StackPanel>
                     </Border>
-                    <Border x:Name="FormatBadge" Margin="8,0,0,0" CornerRadius="4" Padding="8,2" BorderThickness="1"
-                            Background="{DynamicResource ControlFillColorDefaultBrush}"
-                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                            ToolTip="Resolution and frame rate received from the iPhone">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock x:Name="FormatResolution" FontSize="10" HorizontalAlignment="Right"
-                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                            <TextBlock x:Name="FormatFps" FontSize="10" HorizontalAlignment="Right"
-                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    <ui:Button x:Name="FormatButton" Margin="8,0,0,0" Padding="10,3" Appearance="Secondary"
+                               WindowChrome.IsHitTestVisibleInChrome="True" AutomationProperties.Name="Resolution"
+                               Click="OnFormatButtonClick">
+                        <StackPanel Orientation="Horizontal">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock x:Name="FormatResolution" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                                <TextBlock x:Name="FormatFps" FontSize="10" HorizontalAlignment="Right"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                            <ui:SymbolIcon Symbol="ChevronDown24" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" />
                         </StackPanel>
-                    </Border>
+                    </ui:Button>
                 </StackPanel>
             </ui:TitleBar.CenterContent>
             <ui:TitleBar.TrailingContent>
@@ -124,16 +125,27 @@
 
                         <Border Style="{StaticResource PanelDivider}" />
 
-                        <!-- Auto-framing -->
-                        <Grid>
-                            <TextBlock Text="Auto-framing" Style="{StaticResource SectionLabel}" />
-                            <ui:ToggleSwitch x:Name="AutoFrameSwitch" HorizontalAlignment="Right"
-                                             ToolTip="Zoom in and smoothly follow your face (or all faces)"
+                        <!-- Framing -->
+                        <TextBlock Text="Framing" Style="{StaticResource SectionLabel}" Margin="2,0,0,4" />
+                        <Grid Margin="2,4,0,0" ToolTip="Zoom in and smoothly follow your face (or all faces) as you move">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:SymbolIcon Symbol="PersonSquare24" FontSize="16" />
+                                <TextBlock Text="Follow my face" Margin="10,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <ui:ToggleSwitch x:Name="AutoFrameSwitch" HorizontalAlignment="Right" AutomationProperties.Name="Follow my face"
                                              Checked="OnAutoFramingChanged" Unchecked="OnAutoFramingChanged" />
                         </Grid>
+                        <UniformGrid Columns="2" Margin="0,10,0,0">
+                            <ui:Button x:Name="FrameOnceButton" Margin="0,0,3,0" HorizontalAlignment="Stretch"
+                                       Icon="{ui:SymbolIcon ZoomFit24}" Content="Frame me" Click="OnFrameOnceClick"
+                                       ToolTip="Zoom in on your face now and keep that framing (it doesn't follow you)" />
+                            <ui:Button x:Name="ResetFramingButton" Margin="3,0,0,0" HorizontalAlignment="Stretch"
+                                       Icon="{ui:SymbolIcon ArrowReset24}" Content="Reset" Click="OnResetFramingClick"
+                                       ToolTip="Zoom out to the full picture" />
+                        </UniformGrid>
                         <Slider x:Name="FramingSlider" Margin="0,10,0,0" Minimum="0" Maximum="100" SmallChange="5" LargeChange="10"
                                 IsMoveToPointEnabled="True" ValueChanged="OnFramingChanged"
-                                ToolTip="Wide: head and shoulders. Tight: head fills the picture." />
+                                ToolTip="How close to frame your face. Wide: head and shoulders. Tight: head fills the picture." />
                         <Grid Margin="2,0,2,0">
                             <TextBlock Text="Wide" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                             <TextBlock Text="Tight" FontSize="12" HorizontalAlignment="Right" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />

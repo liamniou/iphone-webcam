@@ -62,6 +62,10 @@ Get-ChildItem $SourceDir -Exclude 'IPhoneWebcamSource.dll', '*.pdb', 'install.ps
 $process = Start-Process regsvr32.exe -ArgumentList '/s', "`"$dll`"" -Wait -PassThru
 if ($process.ExitCode -ne 0) { throw "regsvr32 failed with exit code $($process.ExitCode)" }
 
+# The Windows Camera Frame Server keeps a loaded camera DLL in memory until it restarts; stop it so
+# the new DLL is used (Windows starts the service again when an app opens a camera).
+Stop-Service FrameServer -Force -ErrorAction SilentlyContinue
+
 $shell = New-Object -ComObject WScript.Shell
 $link = $shell.CreateShortcut($shortcut)
 $link.TargetPath = Join-Path $installDir 'IPhoneWebcam.exe'

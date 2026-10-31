@@ -38,6 +38,7 @@ namespace
     constexpr uint32_t MaxMessageSize = 16 * 1024 * 1024;
     constexpr auto ReconnectDelay = std::chrono::seconds(2);
     constexpr ULONGLONG FaceDataMaxAgeMs = 1000;
+    constexpr ULONGLONG FrameOnceTimeoutMs = 3000;
     constexpr uint8_t MaxFacesPerMessage = 8;
 
     template <size_t N>
@@ -125,14 +126,33 @@ public:
     void SetPreviewEnabled(bool enabled) { m_writer.SetPreviewEnabled(enabled); }
     void SetAutoFraming(bool enabled, float tightness)
     {
-        m_autoFraming = enabled;
         m_tightness = std::clamp(tightness, 0.0f, 1.0f);
+        if (enabled)
+        {
+            m_framingMode = static_cast<int>(FramingMode::Follow);
+            m_frameOncePending = false;
+        }
+        else if (m_framingMode == static_cast<int>(FramingMode::Follow))
+        {
+            m_framingMode = static_cast<int>(FramingMode::Off);
+        }
+    }
+    void FrameOnce()
+    {
+        m_frameOnceTick = GetTickCount64();
+        m_frameOncePending = true;
+    }
+    void ResetFraming()
+    {
+        m_frameOncePending = false;
+        m_framingMode = static_cast<int>(FramingMode::Off);
     }
     void SetRetouch(float redness, float smoothing)
     {
         m_redness = std::clamp(redness, 0.0f, 1.0f);
         m_smoothing = std::clamp(smoothing, 0.0f, 1.0f);
     }
+    HRESULT SetOutputFormat(const vcam::CameraFormat& format);
 
     int32_t GetDevices(IPWC_DEVICE* devices, int32_t capacity);
     void RefreshDevices() { m_browser.Refresh(); }
@@ -143,6 +163,14 @@ private:
     void WorkerLoop();
     std::wstring Stream(SOCKET s);
     void ResetStatsLocked();
+    vcam::CameraFormat OutputFormat() const
+    {
+        uint64_t packed = m_outputFormat;
+        return { static_cast<uint32_t>(packed >> 32), static_cast<uint32_t>((packed >> 16) & 0xFFFF), static_cast<uint32_t>(packed & 0xFFFF) };
+    }
+    static bool SendFormatCommand(SOCKET s, const vcam::CameraFormat& format);
+    HRESULT CreateCameraLocked();
+    void CameraMaintenanceLoop();
 
     std::mutex m_lock;
     std::condition_variable m_cv;
@@ -161,10 +189,15 @@ private:
     std::atomic<bool> m_hardwareDecode{ true };
     std::atomic<bool> m_mirror{ false };
     std::atomic<bool> m_rotate180{ false };
-    std::atomic<bool> m_autoFraming{ false };
+    std::atomic<int> m_framingMode{ static_cast<int>(FramingMode::Off) };
+    std::atomic<bool> m_frameOncePending{ false };
+    std::atomic<ULONGLONG> m_frameOnceTick{ 0 };
     std::atomic<float> m_tightness{ 0.5f };
     std::atomic<float> m_redness{ 0.0f };
     std::atomic<float> m_smoothing{ 0.0f };
+    // width << 32 | height << 16 | fps
+    std::atomic<uint64_t> m_outputFormat{ (uint64_t(vcam::DefaultFormat.width) << 32) |
+                                          (uint64_t(vcam::DefaultFormat.height) << 16) | vcam::DefaultFormat.fps };
 
     IPWC_STATE m_state = IPWC_STATE_IDLE;
     std::wstring m_message = L"Not connected";
@@ -174,6 +207,8 @@ private:
     int32_t m_faces = -1;
 
     ComPtr<IMFVirtualCamera> m_camera;
+    vcam::CameraFormat m_cameraFormat{}; // format the registered camera was created with
+    std::thread m_cameraThread;
     DeviceBrowser m_browser;
     FrameWriter m_writer;
     std::unique_ptr<GpuDevice> m_gpu; // null when no usable GPU
@@ -197,7 +232,8 @@ HRESULT Engine::Initialize()
     if (SUCCEEDED(gpu->Create()))
     {
         m_gpu = std::move(gpu);
-        if (FAILED(m_effects.Initialize(m_gpu.get(), vcam::FrameWidth, vcam::FrameHeight)))
+        vcam::CameraFormat format = OutputFormat();
+        if (FAILED(m_effects.Initialize(m_gpu.get(), format.width, format.height)))
         {
             OutputDebugStringW(L"IPhoneWebcamEngine: effects pipeline unavailable\n");
         }
@@ -216,8 +252,31 @@ HRESULT Engine::StartVirtualCamera()
     if (!m_initialized) return E_UNEXPECTED;
     if (m_camera) return S_OK;
 
+    // The camera source reads the format when an app opens the camera.
+    if (!vcam::WriteCameraFormat(OutputFormat()))
+    {
+        OutputDebugStringW(L"IPhoneWebcamEngine: couldn't write the camera format file\n");
+    }
+
+    HRESULT hr = CreateCameraLocked();
+    m_writer.SetPublishEnabled(SUCCEEDED(hr));
+    if (SUCCEEDED(hr))
+    {
+        m_cameraThread = std::thread([this] { CameraMaintenanceLoop(); });
+    }
+    return hr;
+}
+
+HRESULT Engine::CreateCameraLocked()
+{
     HRESULT hr = E_FAIL;
     RunOnMta([&] {
+        if (m_camera)
+        {
+            m_camera->Remove();
+            m_camera->Shutdown();
+            m_camera.Reset();
+        }
         ComPtr<IMFVirtualCamera> camera;
         hr = MFCreateVirtualCamera(MFVirtualCameraType_SoftwareCameraSource,
                                    MFVirtualCameraLifetime_Session,
@@ -228,8 +287,56 @@ HRESULT Engine::StartVirtualCamera()
         if (SUCCEEDED(hr)) hr = camera->Start(nullptr);
         if (SUCCEEDED(hr)) m_camera = camera;
     });
-    m_writer.SetPublishEnabled(SUCCEEDED(hr));
+    if (SUCCEEDED(hr)) m_cameraFormat = OutputFormat();
     return hr;
+}
+
+void Engine::CameraMaintenanceLoop()
+{
+    // The Frame Server keeps the camera source (and so its format) for as long as the camera is
+    // registered. After a format change, re-register the camera once no app is using it, so the
+    // next app that opens it gets the new format.
+    std::unique_lock lock(m_lock);
+    while (!m_stopping)
+    {
+        m_cv.wait_for(lock, std::chrono::milliseconds(500));
+        if (m_stopping || !m_camera || OutputFormat() == m_cameraFormat) continue;
+        lock.unlock();
+        bool inUse = m_writer.IsCameraInUse();
+        lock.lock();
+        if (inUse || m_stopping || OutputFormat() == m_cameraFormat) continue;
+        if (FAILED(CreateCameraLocked()))
+        {
+            OutputDebugStringW(L"IPhoneWebcamEngine: re-registering the virtual camera failed\n");
+            m_writer.SetPublishEnabled(m_camera != nullptr);
+            m_cameraFormat = OutputFormat(); // don't retry in a loop
+        }
+    }
+}
+
+bool Engine::SendFormatCommand(SOCKET s, const vcam::CameraFormat& format)
+{
+    // 'F' | uint16 BE width | uint16 BE height | uint8 fps
+    const uint8_t command[6] = {
+        'F', static_cast<uint8_t>(format.width >> 8), static_cast<uint8_t>(format.width),
+        static_cast<uint8_t>(format.height >> 8), static_cast<uint8_t>(format.height), static_cast<uint8_t>(format.fps) };
+    return send(s, reinterpret_cast<const char*>(command), sizeof(command), 0) == sizeof(command);
+}
+
+HRESULT Engine::SetOutputFormat(const vcam::CameraFormat& format)
+{
+    if (!vcam::IsSupportedFormat(format)) return E_INVALIDARG;
+    m_outputFormat = (uint64_t(format.width) << 32) | (uint64_t(format.height) << 16) | format.fps;
+
+    std::lock_guard lock(m_lock);
+    // Only the process that registered the camera controls its format (not --dev / --no-camera runs).
+    if (m_camera && !vcam::WriteCameraFormat(format))
+    {
+        OutputDebugStringW(L"IPhoneWebcamEngine: couldn't write the camera format file\n");
+    }
+    if (m_socket != INVALID_SOCKET) SendFormatCommand(m_socket, format);
+    m_cv.notify_all(); // camera maintenance re-registers the camera when it's idle
+    return S_OK;
 }
 
 void Engine::Shutdown()
@@ -248,6 +355,7 @@ void Engine::Shutdown()
     }
     m_cv.notify_all();
     if (m_worker.joinable()) m_worker.join();
+    if (m_cameraThread.joinable()) m_cameraThread.join();
     m_browser.Stop();
 
     if (m_camera)
@@ -332,6 +440,7 @@ void Engine::GetStatus(IPWC_STATUS* status)
         result.camera = !m_camera ? IPWC_CAMERA_UNAVAILABLE : IPWC_CAMERA_READY;
         result.faces = m_faces;
         result.effectsAvailable = m_effects.IsReady() ? 1 : 0;
+        result.framing = m_frameOncePending ? IPWC_FRAMING_PENDING : m_framingMode.load();
     }
     if (result.camera == IPWC_CAMERA_READY && m_writer.IsCameraInUse()) result.camera = IPWC_CAMERA_IN_USE;
     *status = result;
@@ -452,6 +561,10 @@ std::wstring Engine::Stream(SOCKET s)
     std::vector<NormRect> predicted;
     m_tracker.Reset();
     auto lastFrameTime = std::chrono::steady_clock::now();
+    vcam::CameraFormat appliedFormat{};
+
+    // Tell the phone which format to capture and stream (older iPhone app versions ignore it).
+    SendFormatCommand(s, OutputFormat());
 
     auto writeFallback = [&](const DecodedFrame& frame) {
         if (frame.texture) decoder.ReadBack(frame, [&](const DecodedFrame& cpu) { m_writer.Write(cpu); });
@@ -466,6 +579,15 @@ std::wstring Engine::Stream(SOCKET s)
         auto now = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double>(now - lastFrameTime).count();
         lastFrameTime = now;
+
+        // Apply a changed output format on this (the only writing) thread.
+        vcam::CameraFormat format = OutputFormat();
+        if (!(format == appliedFormat))
+        {
+            m_writer.SetOutputSize(format.width, format.height);
+            if (m_effects.IsReady()) m_effects.SetOutputSize(format.width, format.height);
+            appliedFormat = format;
+        }
 
         if (!m_effects.IsReady())
         {
@@ -488,8 +610,22 @@ std::wstring Engine::Stream(SOCKET s)
             }
         }
 
+        // On-demand framing: frame the faces once they're visible (give up after a few seconds).
+        if (m_frameOncePending)
+        {
+            if (fresh && m_tracker.FrameOnce(predicted, m_tightness))
+            {
+                m_framingMode = static_cast<int>(FramingMode::Hold);
+                m_frameOncePending = false;
+            }
+            else if (GetTickCount64() - m_frameOnceTick > FrameOnceTimeoutMs)
+            {
+                m_frameOncePending = false;
+            }
+        }
+
         FrameParams params;
-        params.crop = m_tracker.Update(predicted, fresh, m_autoFraming, m_tightness, dt);
+        params.crop = m_tracker.Update(predicted, fresh, static_cast<FramingMode>(m_framingMode.load()), m_tightness, dt);
         params.effects.mirror = m_mirror;
         params.effects.rotate180 = m_rotate180;
         params.effects.redness = m_redness;
@@ -619,6 +755,13 @@ IPWC_API void __stdcall IPWC_SetHardwareDecode(BOOL enabled) { TheEngine().SetHa
 IPWC_API void __stdcall IPWC_SetTransform(BOOL mirror, BOOL rotate180) { TheEngine().SetTransform(mirror != FALSE, rotate180 != FALSE); }
 IPWC_API void __stdcall IPWC_SetPreviewEnabled(BOOL enabled) { TheEngine().SetPreviewEnabled(enabled != FALSE); }
 IPWC_API void __stdcall IPWC_SetAutoFraming(BOOL enabled, float tightness) { TheEngine().SetAutoFraming(enabled != FALSE, tightness); }
+IPWC_API void __stdcall IPWC_FrameOnce() { TheEngine().FrameOnce(); }
+IPWC_API void __stdcall IPWC_ResetFraming() { TheEngine().ResetFraming(); }
+IPWC_API HRESULT __stdcall IPWC_SetOutputFormat(int32_t width, int32_t height, int32_t fps)
+{
+    if (width <= 0 || height <= 0 || fps <= 0) return E_INVALIDARG;
+    return TheEngine().SetOutputFormat({ static_cast<uint32_t>(width), static_cast<uint32_t>(height), static_cast<uint32_t>(fps) });
+}
 IPWC_API void __stdcall IPWC_SetRetouch(float redness, float smoothing) { TheEngine().SetRetouch(redness, smoothing); }
 
 IPWC_API int32_t __stdcall IPWC_GetDevices(IPWC_DEVICE* devices, int32_t capacity)

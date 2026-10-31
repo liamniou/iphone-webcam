@@ -20,12 +20,15 @@
             <ui:CardControl Icon="{ui:SymbolIcon SlideSize24}" Margin="0,0,0,4">
                 <ui:CardControl.Header>
                     <StackPanel>
-                        <TextBlock Text="Camera formats" />
-                        <TextBlock Text="3840×2160, 1920×1080 and 1280×720 at 30 fps. The app using the camera picks the size; Teams and Zoom usually choose 1080p or 720p."
+                        <TextBlock Text="Resolution" />
+                        <TextBlock Text="What the iPhone sends and the virtual camera provides. Apps already using the camera switch after they turn their camera off and on."
                                    Style="{StaticResource SecondaryText}" />
                     </StackPanel>
                 </ui:CardControl.Header>
+                <ComboBox x:Name="FormatCombo" MinWidth="180" DisplayMemberPath="Label" SelectionChanged="OnFormatChanged"
+                          AutomationProperties.Name="Resolution" />
             </ui:CardControl>
+            <TextBlock x:Name="FormatDescription" Style="{StaticResource SecondaryText}" Margin="52,0,0,4" />
 
             <TextBlock Text="Performance" FontSize="16" FontWeight="SemiBold" Margin="0,24,0,10" />
 

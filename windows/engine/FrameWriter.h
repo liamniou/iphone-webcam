@@ -7,7 +7,7 @@
 #include <mutex>
 #include <vector>
 
-// Turns decoded frames into the virtual camera's fixed 4K NV12 format (scaling/letterboxing,
+// Turns decoded frames into the virtual camera's NV12 output format (scaling/letterboxing,
 // mirror/rotation), publishes them to the shared memory read by the media source and
 // produces a small BGRA preview for the UI.
 class FrameWriter
@@ -21,9 +21,11 @@ public:
     // Only the process that registered the virtual camera may feed it; otherwise frames are only
     // used for the preview (prevents e.g. a CLI test run from mixing into a camera in use).
     void SetPublishEnabled(bool enabled) { m_publish = enabled; }
+    // Output frame size (even, at most vcam::FrameWidth x FrameHeight). Call from the writing thread.
+    void SetOutputSize(uint32_t width, uint32_t height) { m_width = width; m_height = height; }
 
     void Write(const DecodedFrame& frame);
-    // Writes a frame that is already in the final 4K layout (from the GPU effects pipeline).
+    // Writes a frame that is already in the final output layout (from the GPU effects pipeline).
     void WriteOutput(const uint8_t* y, UINT yPitch, const uint8_t* uv, UINT uvPitch);
     void ClearPreview();
 
@@ -43,6 +45,8 @@ private:
     uint8_t* volatile m_view = nullptr;
     ULONGLONG m_lastAttempt = 0;
     std::vector<uint8_t> m_private; // used when no app has opened the camera yet
+    uint32_t m_width = vcam::DefaultFormat.width;
+    uint32_t m_height = vcam::DefaultFormat.height;
     std::atomic<bool> m_mirror{ false };
     std::atomic<bool> m_rotate180{ false };
     std::atomic<bool> m_previewEnabled{ false };

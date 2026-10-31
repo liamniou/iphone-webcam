@@ -4,8 +4,6 @@ import UIKit
 
 /// Owns the capture session, encoder and server, and glues them together.
 final class CameraController: NSObject, ObservableObject {
-    static let fps = 30
-
     @Published private(set) var status = "Starting…"
     @Published private(set) var isStreaming = false
     @Published private(set) var ipAddress = ""
@@ -14,24 +12,33 @@ final class CameraController: NSObject, ObservableObject {
 
     let session = AVCaptureSession()
 
+    /// Capture format; chosen by the PC app (default until it connects: 1080p at 30 fps).
+    private struct Format: Equatable {
+        var width: Int32
+        var height: Int32
+        var fps: Int
+    }
+
     private let sessionQueue = DispatchQueue(label: "camera.session")
     private let videoQueue = DispatchQueue(label: "camera.video")
     private let videoOutput = AVCaptureVideoDataOutput()
-    private let encoder = H264Encoder(fps: CameraController.fps)
+    private let encoder = H264Encoder(fps: 30)
     private let faceDetector = FaceDetector()
     private let server = StreamServer()
     private let clientLock = NSLock()
     private var clientConnected = false
     private var configured = false
     private var orientation: AVCaptureVideoOrientation = .landscapeRight
+    private var requestedFormat = Format(width: 1920, height: 1080, fps: 30)
+    private var currentDevice: AVCaptureDevice?
 
     override init() {
         super.init()
         encoder.onEncodedFrame = { [weak self] data, isKeyFrame in
             self?.server.send(frame: data, isKeyFrame: isKeyFrame)
         }
-        encoder.onResolutionChange = { [weak self] width, height in
-            DispatchQueue.main.async { self?.resolution = "\(width)×\(height) @ \(CameraController.fps) fps" }
+        encoder.onResolutionChange = { [weak self] width, height, fps in
+            DispatchQueue.main.async { self?.resolution = "\(width)×\(height) @ \(fps) fps" }
         }
         // Face positions let the PC app auto-frame and retouch; detection runs only while streaming.
         faceDetector.onFaces = { [weak self] faces in
@@ -39,6 +46,9 @@ final class CameraController: NSObject, ObservableObject {
         }
         server.onKeyFrameRequested = { [weak self] in
             self?.encoder.requestKeyFrame()
+        }
+        server.onFormatRequested = { [weak self] width, height, fps in
+            self?.setFormat(width: width, height: height, fps: fps)
         }
         server.onStatusChange = { [weak self] text in
             DispatchQueue.main.async { self?.status = text }
@@ -112,6 +122,22 @@ final class CameraController: NSObject, ObservableObject {
         }
     }
 
+    /// Switches capture to the format requested by the PC (or the closest one this camera supports).
+    func setFormat(width: Int, height: Int, fps: Int) {
+        guard width >= 320, height >= 240, (1...120).contains(fps) else { return }
+        sessionQueue.async {
+            let format = Format(width: Int32(width), height: Int32(height), fps: fps)
+            guard format != self.requestedFormat else { return }
+            self.requestedFormat = format
+            guard self.configured, let device = self.currentDevice else { return }
+            self.session.beginConfiguration()
+            self.applyFormat(to: device)
+            self.applyOrientation()
+            self.session.commitConfiguration()
+            self.encoder.requestKeyFrame()
+        }
+    }
+
     private func configureSession() {
         session.beginConfiguration()
         defer { session.commitConfiguration() }
@@ -146,18 +172,50 @@ final class CameraController: NSObject, ObservableObject {
         session.sessionPreset = .high
         guard session.canAddInput(input) else { return false }
         session.addInput(input)
+        currentDevice = device
+        applyFormat(to: device)
+        return true
+    }
 
-        // 4K when this camera supports it (all back cameras since iPhone 6s, front since iPhone 11),
-        // otherwise 1080p; the PC side scales to its 4K output.
-        if session.canSetSessionPreset(.hd4K3840x2160) {
-            session.sessionPreset = .hd4K3840x2160
-        } else if session.canSetSessionPreset(.hd1920x1080) {
-            session.sessionPreset = .hd1920x1080
+    /// Picks the device format closest to the requested size and frame rate and makes it active.
+    /// Must be called on the session queue inside begin/commitConfiguration.
+    private func applyFormat(to device: AVCaptureDevice) {
+        let wanted = requestedFormat
+        func dimensions(_ format: AVCaptureDevice.Format) -> CMVideoDimensions {
+            CMVideoFormatDescriptionGetDimensions(format.formatDescription)
         }
+        func maxRate(_ format: AVCaptureDevice.Format) -> Double {
+            format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+        }
+        // 8-bit 4:2:0 formats (no HDR/10-bit), 16:9 only.
+        let candidates = device.formats.filter { format in
+            let subtype = CMFormatDescriptionGetMediaSubType(format.formatDescription)
+            let size = dimensions(format)
+            return (subtype == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
+                    subtype == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) &&
+                size.width * 9 == size.height * 16
+        }
+        // Prefer: the exact size at the wanted rate > the exact size at any rate >
+        // the largest smaller size that reaches the wanted rate > the largest smaller size.
+        let exact = candidates.filter { dimensions($0).width == wanted.width && dimensions($0).height == wanted.height }
+        let smaller = candidates.filter { dimensions($0).height < wanted.height }
+            .sorted { dimensions($0).height > dimensions($1).height }
+        let choice = exact.first { maxRate($0) >= Double(wanted.fps) }
+            ?? exact.max { maxRate($0) < maxRate($1) }
+            ?? smaller.first { maxRate($0) >= Double(wanted.fps) }
+            ?? smaller.first
 
+        var fps = wanted.fps
         do {
             try device.lockForConfiguration()
-            let frameDuration = CMTime(value: 1, timescale: CMTimeScale(Self.fps))
+            if let choice {
+                device.activeFormat = choice // switches the session preset to .inputPriority
+                fps = min(wanted.fps, Int(maxRate(choice)))
+            } else if session.canSetSessionPreset(.hd1920x1080) {
+                session.sessionPreset = .hd1920x1080
+                fps = min(wanted.fps, Int(maxRate(device.activeFormat)))
+            }
+            let frameDuration = CMTime(value: 1, timescale: CMTimeScale(max(fps, 1)))
             let supported = device.activeFormat.videoSupportedFrameRateRanges.contains {
                 $0.minFrameDuration <= frameDuration && frameDuration <= $0.maxFrameDuration
             }
@@ -172,7 +230,7 @@ final class CameraController: NSObject, ObservableObject {
         } catch {
             print("Could not configure device: \(error)")
         }
-        return true
+        encoder.setFrameRate(max(fps, 1))
     }
 
     private func applyOrientation() {

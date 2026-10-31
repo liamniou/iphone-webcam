@@ -12,6 +12,8 @@ if ($running) {
 if (Test-Path $dll) {
     Start-Process regsvr32.exe -ArgumentList '/s', '/u', "`"$dll`"" -Wait | Out-Null
 }
+# Unload the camera DLL from the Windows Camera Frame Server so it can be deleted.
+Stop-Service FrameServer -Force -ErrorAction SilentlyContinue
 Remove-Item $shortcut -ErrorAction SilentlyContinue
 
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'

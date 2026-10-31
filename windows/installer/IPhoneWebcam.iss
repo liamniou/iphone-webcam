@@ -98,8 +98,23 @@ begin
     RenameFile(Dll, Dll + '.old-' + GetDateTimeString('yyyymmddhhnnss', #0, #0));
 end;
 
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
 begin
+  // The Windows Camera Frame Server keeps a loaded camera DLL in memory until it restarts. Stop it
+  // so the next app that opens a camera uses the new DLL (Windows starts the service on demand).
+  if CurStep = ssPostInstall then
+    Exec(ExpandConstant('{sys}\sc.exe'), 'stop FrameServer', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+begin
+  // Unload the camera DLL so it can be deleted.
+  if CurUninstallStep = usUninstall then
+    Exec(ExpandConstant('{sys}\sc.exe'), 'stop FrameServer', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   // "Start with Windows" may also have been enabled from inside the app.
   if CurUninstallStep = usPostUninstall then
     RegDeleteValue(HKEY_CURRENT_USER, RunKey, 'IPhoneWebcam');

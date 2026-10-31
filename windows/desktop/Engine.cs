@@ -36,6 +36,16 @@ internal struct EngineStatus
     /// <summary>Faces currently detected by the iPhone; -1 if the phone doesn't send face data.</summary>
     public int Faces;
     public int EffectsAvailable;
+    public FramingState Framing;
+    public int Reserved2;
+}
+
+internal enum FramingState
+{
+    Off = 0,
+    Follow = 1,
+    Hold = 2,
+    Pending = 3,
 }
 
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 8)]
@@ -84,6 +94,15 @@ internal static class Engine
 
     [DllImport(Dll, EntryPoint = "IPWC_SetAutoFraming")]
     public static extern void SetAutoFraming([MarshalAs(UnmanagedType.Bool)] bool enabled, float tightness);
+
+    [DllImport(Dll, EntryPoint = "IPWC_FrameOnce")]
+    public static extern void FrameOnce();
+
+    [DllImport(Dll, EntryPoint = "IPWC_ResetFraming")]
+    public static extern void ResetFraming();
+
+    [DllImport(Dll, EntryPoint = "IPWC_SetOutputFormat")]
+    public static extern int SetOutputFormat(int width, int height, int fps);
 
     [DllImport(Dll, EntryPoint = "IPWC_SetRetouch")]
     public static extern void SetRetouch(float redness, float smoothing);

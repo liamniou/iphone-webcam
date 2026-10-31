@@ -20,6 +20,8 @@ internal sealed class Settings
     public bool AutoFraming { get; set; }
     /// <summary>0 = wide, 100 = tight.</summary>
     public int Framing { get; set; } = 50;
+    /// <summary>Camera format id, see <see cref="VideoFormat.All"/> (e.g. "1080p30").</summary>
+    public string OutputFormat { get; set; } = VideoFormat.Default.Id;
     /// <summary>Retouch on/off; the strengths below are kept when it's switched off.
     /// Null in settings from version 1.1, where retouch was on whenever a strength was above 0.</summary>
     public bool? RetouchEnabled { get; set; }

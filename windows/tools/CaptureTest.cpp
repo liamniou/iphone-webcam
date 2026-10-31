@@ -68,29 +68,51 @@ int wmain(int argc, wchar_t** argv)
     const wchar_t* output = argc > 1 ? argv[1] : L"capture.png";
     int frameCount = argc > 2 ? _wtoi(argv[2]) : 90;
     UINT32 requestedWidth = argc > 3 ? static_cast<UINT32>(_wtoi(argv[3])) : 0;
+    // Optional 4th argument: path of IPhoneWebcamSource.dll to load in-process instead of using the
+    // registered camera (tests the source without the Frame Server; frames are the placeholder).
+    const wchar_t* sourceDll = argc > 4 ? argv[4] : nullptr;
 
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     MFStartup(MF_VERSION);
 
-    ComPtr<IMFAttributes> attributes;
-    MFCreateAttributes(&attributes, 1);
-    attributes->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID);
-    IMFActivate** devices = nullptr;
-    UINT32 count = 0;
-    Check(MFEnumDeviceSources(attributes.Get(), &devices, &count), "MFEnumDeviceSources");
-
     ComPtr<IMFActivate> device;
-    for (UINT32 i = 0; i < count; ++i)
+    if (sourceDll)
     {
-        wchar_t* name = nullptr;
-        UINT32 length = 0;
-        devices[i]->GetAllocatedString(MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &name, &length);
-        wprintf(L"Camera: %s\n", name ? name : L"?");
-        if (name && wcsncmp(name, L"iPhone Webcam", 13) == 0) device = devices[i];
-        CoTaskMemFree(name);
+        HMODULE module = LoadLibraryW(sourceDll);
+        if (!module)
+        {
+            wprintf(L"Can't load %s\n", sourceDll);
+            return 1;
+        }
+        using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
+        auto getClassObject = reinterpret_cast<GetClassObject>(GetProcAddress(module, "DllGetClassObject"));
+        const CLSID clsid = { 0x6c7e1e8b, 0x3b0f, 0x4c5a, { 0x9f, 0x1d, 0x2a, 0x6b, 0x8e, 0x4d, 0x9c, 0x31 } };
+        ComPtr<IClassFactory> factory;
+        Check(getClassObject(clsid, IID_PPV_ARGS(&factory)), "DllGetClassObject");
+        Check(factory->CreateInstance(nullptr, IID_PPV_ARGS(&device)), "CreateInstance");
+        printf("Loaded the camera source in-process\n");
     }
-    for (UINT32 i = 0; i < count; ++i) devices[i]->Release();
-    CoTaskMemFree(devices);
+    else
+    {
+        ComPtr<IMFAttributes> attributes;
+        MFCreateAttributes(&attributes, 1);
+        attributes->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID);
+        IMFActivate** devices = nullptr;
+        UINT32 count = 0;
+        Check(MFEnumDeviceSources(attributes.Get(), &devices, &count), "MFEnumDeviceSources");
+
+        for (UINT32 i = 0; i < count; ++i)
+        {
+            wchar_t* name = nullptr;
+            UINT32 length = 0;
+            devices[i]->GetAllocatedString(MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &name, &length);
+            wprintf(L"Camera: %s\n", name ? name : L"?");
+            if (name && wcsncmp(name, L"iPhone Webcam", 13) == 0) device = devices[i];
+            CoTaskMemFree(name);
+        }
+        for (UINT32 i = 0; i < count; ++i) devices[i]->Release();
+        CoTaskMemFree(devices);
+    }
     if (!device)
     {
         printf("iPhone Webcam not found\n");
@@ -109,7 +131,9 @@ int wmain(int argc, wchar_t** argv)
         if (FAILED(reader->GetNativeMediaType(videoStream, i, &native))) break;
         UINT32 nw = 0, nh = 0;
         MFGetAttributeSize(native.Get(), MF_MT_FRAME_SIZE, &nw, &nh);
-        printf("Offered format %lu: %ux%u\n", i, nw, nh);
+        UINT32 rateN = 0, rateD = 1;
+        MFGetAttributeRatio(native.Get(), MF_MT_FRAME_RATE, &rateN, &rateD);
+        printf("Offered format %lu: %ux%u @ %u fps\n", i, nw, nh, rateD ? rateN / rateD : 0);
         if (requestedWidth != 0 && nw == requestedWidth)
         {
             Check(reader->SetCurrentMediaType(videoStream, nullptr, native.Get()), "SetCurrentMediaType");

@@ -9,7 +9,8 @@ import UIKit
 ///   type 1: H.264 Annex B access unit
 ///   type 2: face detections: UInt8 count, then count x (x, y, w, h) little-endian Float32,
 ///           normalized to the video frame, origin top-left
-/// PC -> iPhone: a single byte 'K' requests a keyframe.
+/// PC -> iPhone: 'K' requests a keyframe; 'F' + UInt16 BE width + UInt16 BE height + UInt8 fps
+/// selects the capture/stream format.
 final class StreamServer {
     static let port: NWEndpoint.Port = 5005
     static let serviceType = "_iphonewebcam._tcp"
@@ -17,10 +18,13 @@ final class StreamServer {
     var onStatusChange: ((String) -> Void)?
     var onClientChange: ((Bool) -> Void)?
     var onKeyFrameRequested: (() -> Void)?
+    /// Called on the server queue with (width, height, fps) requested by the PC.
+    var onFormatRequested: ((Int, Int, Int) -> Void)?
 
     private let queue = DispatchQueue(label: "stream.server")
     private var listener: NWListener?
     private var connection: NWConnection?
+    private var commandBuffer = Data()
     private var inFlight = 0
     private var waitingForKeyFrame = true
     private let maxInFlight = 4
@@ -77,6 +81,7 @@ final class StreamServer {
     private func accept(_ newConnection: NWConnection) {
         connection?.cancel()
         connection = newConnection
+        commandBuffer.removeAll()
         inFlight = 0
         waitingForKeyFrame = true
 
@@ -104,14 +109,34 @@ final class StreamServer {
     private func receive(on connection: NWConnection) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 256) { [weak self] data, _, isComplete, error in
             guard let self else { return }
-            if let data, data.contains(UInt8(ascii: "K")) {
-                self.onKeyFrameRequested?()
+            if let data, connection === self.connection {
+                self.commandBuffer.append(data)
+                self.processCommands()
             }
             if isComplete || error != nil {
                 connection.cancel()
                 return
             }
             self.receive(on: connection)
+        }
+    }
+
+    /// Commands from the PC: 'K' = keyframe, 'F' + UInt16 BE width + UInt16 BE height + UInt8 fps = format.
+    private func processCommands() {
+        while let first = commandBuffer.first {
+            if first == UInt8(ascii: "K") {
+                commandBuffer.removeFirst()
+                onKeyFrameRequested?()
+            } else if first == UInt8(ascii: "F") {
+                guard commandBuffer.count >= 6 else { return }
+                let bytes = [UInt8](commandBuffer.prefix(6))
+                commandBuffer.removeFirst(6)
+                let width = Int(bytes[1]) << 8 | Int(bytes[2])
+                let height = Int(bytes[3]) << 8 | Int(bytes[4])
+                onFormatRequested?(width, height, Int(bytes[5]))
+            } else {
+                commandBuffer.removeFirst()
+            }
         }
     }
 

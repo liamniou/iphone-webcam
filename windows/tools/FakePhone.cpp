@@ -28,7 +28,9 @@ namespace
     bool g_drawFace = true;  // draw the synthetic face and the reddish test patch
     bool g_sendFaces = true; // send face metadata (message type 2) like the iPhone app
     float g_faceSize = 0.30f; // face height as a fraction of the frame height
-    constexpr UINT32 Fps = 30;
+    bool g_stillFace = false; // keep the face at one (off-centre) position
+    UINT32 g_fps = 30;
+    bool g_followFormat = true; // obey format commands from the PC like the iPhone app
     constexpr uint16_t Port = 5005;
 
     bool SendAll(SOCKET s, const uint8_t* data, size_t length);
@@ -53,7 +55,7 @@ namespace
         output->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
         output->SetUINT32(MF_MT_AVG_BITRATE, 6'000'000);
         MFSetAttributeSize(output.Get(), MF_MT_FRAME_SIZE, g_width, g_height);
-        MFSetAttributeRatio(output.Get(), MF_MT_FRAME_RATE, Fps, 1);
+        MFSetAttributeRatio(output.Get(), MF_MT_FRAME_RATE, g_fps, 1);
         MFSetAttributeRatio(output.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
         output->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
         output->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base);
@@ -64,7 +66,7 @@ namespace
         input->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
         input->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_NV12);
         MFSetAttributeSize(input.Get(), MF_MT_FRAME_SIZE, g_width, g_height);
-        MFSetAttributeRatio(input.Get(), MF_MT_FRAME_RATE, Fps, 1);
+        MFSetAttributeRatio(input.Get(), MF_MT_FRAME_RATE, g_fps, 1);
         MFSetAttributeRatio(input.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
         input->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
         Check(encoder->SetInputType(0, input.Get(), 0), "SetInputType");
@@ -75,7 +77,7 @@ namespace
             VARIANT value;
             VariantInit(&value);
             value.vt = VT_UI4;
-            value.ulVal = Fps * 2;
+            value.ulVal = g_fps * 2;
             codecApi->SetValue(&CODECAPI_AVEncMPVGOPSize, &value);
             value.vt = VT_BOOL;
             value.boolVal = VARIANT_TRUE;
@@ -92,7 +94,7 @@ namespace
     // Where the synthetic face is at a given frame (slow Lissajous drift around the frame).
     FaceBox FacePosition(uint32_t frame)
     {
-        double t = frame / static_cast<double>(Fps);
+        double t = g_stillFace ? 3.0 : frame / static_cast<double>(g_fps);
         float h = g_faceSize;
         float w = h * g_height / g_width * 0.78f; // a bit narrower than tall, in pixels
         float cx = 0.5f + 0.28f * static_cast<float>(std::sin(t * 0.35));
@@ -227,68 +229,111 @@ namespace
             // about 6 times per second. (The encoder delays frames, so use the output's timestamp.)
             LONGLONG time = 0;
             sample->GetSampleTime(&time);
-            uint32_t frameIndex = static_cast<uint32_t>((time + 10'000'000 / Fps / 2) / (10'000'000 / Fps));
+            uint32_t frameIndex = static_cast<uint32_t>((time + 10'000'000 / g_fps / 2) / (10'000'000 / g_fps));
             if (g_drawFace && g_sendFaces && frameIndex % 5 == 0 && !SendFaces(s, frameIndex)) return false;
         }
     }
 
     void Stream(SOCKET client)
     {
-        auto encoder = CreateEncoder();
-        MFT_OUTPUT_STREAM_INFO info{};
-        encoder->GetOutputStreamInfo(0, &info);
-        bool providesSamples = (info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
-        DWORD outputSize = info.cbSize ? info.cbSize : g_width * g_height;
-
-        std::vector<uint8_t> nv12(g_width * g_height * 3 / 2);
-        LONGLONG time = 0;
-        ULONGLONG start = GetTickCount64();
-        for (uint32_t frame = 0;; ++frame)
+        std::vector<uint8_t> commands;
+        for (bool restart = true; restart;)
         {
-            // Poll for keyframe requests without blocking.
-            u_long nonBlocking = 1;
-            ioctlsocket(client, FIONBIO, &nonBlocking);
-            char request = 0;
-            if (recv(client, &request, 1, 0) == 1 && request == 'K')
+            restart = false;
+            auto encoder = CreateEncoder();
+            MFT_OUTPUT_STREAM_INFO info{};
+            encoder->GetOutputStreamInfo(0, &info);
+            bool providesSamples = (info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
+            DWORD outputSize = info.cbSize ? info.cbSize : g_width * g_height;
+            printf("Streaming %ux%u@%u\n", g_width, g_height, g_fps);
+
+            std::vector<uint8_t> nv12(g_width * g_height * 3 / 2);
+            LONGLONG time = 0;
+            ULONGLONG start = GetTickCount64();
+            for (uint32_t frame = 0;; ++frame)
             {
-                ComPtr<ICodecAPI> codecApi;
-                if (SUCCEEDED(encoder.As(&codecApi)))
+                // Read commands from the PC without blocking: 'K' = keyframe,
+                // 'F' u16be width u16be height u8 fps = change format.
+                u_long nonBlocking = 1;
+                ioctlsocket(client, FIONBIO, &nonBlocking);
+                char buffer[64];
+                int received;
+                while ((received = recv(client, buffer, sizeof(buffer), 0)) > 0) commands.insert(commands.end(), buffer, buffer + received);
+                u_long blocking = 0;
+                ioctlsocket(client, FIONBIO, &blocking);
+
+                bool keyFrame = false;
+                while (!commands.empty())
                 {
-                    VARIANT value;
-                    VariantInit(&value);
-                    value.vt = VT_UI4;
-                    value.ulVal = 1;
-                    codecApi->SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &value);
+                    if (commands[0] == 'K')
+                    {
+                        keyFrame = true;
+                        commands.erase(commands.begin());
+                    }
+                    else if (commands[0] == 'F')
+                    {
+                        if (commands.size() < 6) break;
+                        UINT32 width = (commands[1] << 8) | commands[2], height = (commands[3] << 8) | commands[4], fps = commands[5];
+                        commands.erase(commands.begin(), commands.begin() + 6);
+                        printf("Format requested: %ux%u@%u%s\n", width, height, fps, g_followFormat ? "" : " (ignored)");
+                        if (g_followFormat && width >= 64 && height >= 64 && fps >= 1 && fps <= 60 &&
+                            (width != g_width || height != g_height || fps != g_fps))
+                        {
+                            g_width = width & ~1u;
+                            g_height = height & ~1u;
+                            g_fps = fps;
+                            restart = true;
+                        }
+                    }
+                    else
+                    {
+                        commands.erase(commands.begin());
+                    }
                 }
-                printf("Keyframe requested by receiver\n");
+                if (restart) break;
+
+                if (keyFrame)
+                {
+                    ComPtr<ICodecAPI> codecApi;
+                    if (SUCCEEDED(encoder.As(&codecApi)))
+                    {
+                        VARIANT value;
+                        VariantInit(&value);
+                        value.vt = VT_UI4;
+                        value.ulVal = 1;
+                        codecApi->SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &value);
+                    }
+                    printf("Keyframe requested by receiver\n");
+                }
+
+                FillPattern(nv12, frame);
+                ComPtr<IMFMediaBuffer> mediaBuffer;
+                MFCreateMemoryBuffer(static_cast<DWORD>(nv12.size()), &mediaBuffer);
+                BYTE* data = nullptr;
+                mediaBuffer->Lock(&data, nullptr, nullptr);
+                memcpy(data, nv12.data(), nv12.size());
+                mediaBuffer->Unlock();
+                mediaBuffer->SetCurrentLength(static_cast<DWORD>(nv12.size()));
+                ComPtr<IMFSample> sample;
+                MFCreateSample(&sample);
+                sample->AddBuffer(mediaBuffer.Get());
+                sample->SetSampleTime(time);
+                sample->SetSampleDuration(10'000'000 / g_fps);
+                time += 10'000'000 / g_fps;
+
+                if (FAILED(encoder->ProcessInput(0, sample.Get(), 0))) return;
+                if (!DrainEncoder(encoder.Get(), client, outputSize, providesSamples))
+                {
+                    printf("Receiver disconnected\n");
+                    return;
+                }
+
+                ULONGLONG due = start + (frame + 1) * 1000ULL / g_fps;
+                ULONGLONG now = GetTickCount64();
+                if (due > now) Sleep(static_cast<DWORD>(due - now));
+                if (frame % (g_fps * 5) == 0) printf("Sent %u frames\n", frame);
             }
-            u_long blocking = 0;
-            ioctlsocket(client, FIONBIO, &blocking);
-
-            FillPattern(nv12, frame);
-            ComPtr<IMFMediaBuffer> buffer;
-            MFCreateMemoryBuffer(static_cast<DWORD>(nv12.size()), &buffer);
-            BYTE* data = nullptr;
-            buffer->Lock(&data, nullptr, nullptr);
-            memcpy(data, nv12.data(), nv12.size());
-            buffer->Unlock();
-            buffer->SetCurrentLength(static_cast<DWORD>(nv12.size()));
-            ComPtr<IMFSample> sample;
-            MFCreateSample(&sample);
-            sample->AddBuffer(buffer.Get());
-            sample->SetSampleTime(time);
-            sample->SetSampleDuration(10'000'000 / Fps);
-            time += 10'000'000 / Fps;
-
-            if (FAILED(encoder->ProcessInput(0, sample.Get(), 0))) break;
-            if (!DrainEncoder(encoder.Get(), client, outputSize, providesSamples)) break;
-
-            ULONGLONG due = start + (frame + 1) * 1000ULL / Fps;
-            ULONGLONG now = GetTickCount64();
-            if (due > now) Sleep(static_cast<DWORD>(due - now));
-            if (frame % (Fps * 5) == 0) printf("Sent %u frames\n", frame);
         }
-        printf("Receiver disconnected\n");
     }
 
     VOID WINAPI OnRegistered(DWORD status, PVOID, PDNS_SERVICE_INSTANCE instance)
@@ -306,10 +351,14 @@ int wmain(int argc, wchar_t** argv)
         else if (wcscmp(argv[i], L"--height") == 0 && i + 1 < argc) g_height = _wtoi(argv[++i]);
         else if (wcscmp(argv[i], L"--no-faces") == 0) g_sendFaces = false;
         else if (wcscmp(argv[i], L"--no-face") == 0) g_drawFace = false;
+        else if (wcscmp(argv[i], L"--fixed-format") == 0) g_followFormat = false;
+        else if (wcscmp(argv[i], L"--fps") == 0 && i + 1 < argc) g_fps = _wtoi(argv[++i]);
         else if (wcscmp(argv[i], L"--face-size") == 0 && i + 1 < argc) g_faceSize = static_cast<float>(_wtof(argv[++i]));
+        else if (wcscmp(argv[i], L"--still-face") == 0) g_stillFace = true;
         else
         {
-            printf("Usage: FakePhone.exe [--width N] [--height N] [--face-size 0.05-0.6] [--no-faces (don't send face metadata)] [--no-face (plain pattern)]\n");
+            printf("Usage: FakePhone.exe [--width N] [--height N] [--fps N] [--fixed-format (ignore format requests, like old iPhone apps)]\n"
+                   "                     [--face-size 0.05-0.6] [--still-face] [--no-faces (don't send face metadata)] [--no-face (plain pattern)]\n");
             return 1;
         }
     }
@@ -343,7 +392,7 @@ int wmain(int argc, wchar_t** argv)
         printf("Cannot listen on port %u\n", Port);
         return 1;
     }
-    printf("FakePhone streaming %ux%u@%u on 127.0.0.1:%u\n", g_width, g_height, Fps, Port);
+    printf("FakePhone streaming %ux%u@%u on 127.0.0.1:%u\n", g_width, g_height, g_fps, Port);
 
     for (;;)
     {

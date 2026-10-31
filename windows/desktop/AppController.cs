@@ -143,7 +143,44 @@ internal sealed class AppController
     {
         Engine.SetAutoReconnect(Settings.AutoReconnect);
         Engine.SetHardwareDecode(Settings.HardwareDecode);
+        ApplyFormat();
         ApplyEffects();
+    }
+
+    public VideoFormat Format => VideoFormat.FromId(Settings.OutputFormat);
+
+    /// <summary>Raised when the camera format changes (from any window).</summary>
+    public event Action? FormatChanged;
+
+    public void SetFormat(VideoFormat format)
+    {
+        if (format.Id == Settings.OutputFormat) return;
+        Settings.OutputFormat = format.Id;
+        ApplyFormat();
+        ScheduleSave();
+        FormatChanged?.Invoke();
+    }
+
+    /// <summary>Also called before the virtual camera is registered, so it starts with the chosen format.</summary>
+    public static void ApplyFormat(VideoFormat format) => Engine.SetOutputFormat(format.Width, format.Height, format.Fps);
+
+    private void ApplyFormat() => ApplyFormat(Format);
+
+    /// <summary>On-demand framing: frame the face(s) now and keep that framing (turns auto-framing off).</summary>
+    public void FrameOnce()
+    {
+        Settings.AutoFraming = false;
+        Engine.SetAutoFraming(false, Settings.Framing / 100f);
+        Engine.FrameOnce();
+        ScheduleSave();
+    }
+
+    /// <summary>Back to the full picture (turns auto-framing off).</summary>
+    public void ResetFraming()
+    {
+        Settings.AutoFraming = false;
+        Engine.ResetFraming();
+        ScheduleSave();
     }
 
     /// <summary>Pushes image/effect settings to the engine and schedules a save.</summary>

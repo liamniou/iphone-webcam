@@ -6,8 +6,6 @@
 
 namespace
 {
-    constexpr uint32_t W = vcam::FrameWidth;
-    constexpr uint32_t H = vcam::FrameHeight;
     constexpr ULONGLONG CameraIdleMs = 2000;
 
     inline uint8_t Clamp(int v) { return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v)); }
@@ -46,8 +44,7 @@ bool FrameWriter::TryOpen()
     auto header = reinterpret_cast<vcam::SharedHeader*>(m_view);
     if (header->magic != vcam::SharedMagic)
     {
-        header->width = W;
-        header->height = H;
+        for (auto& size : header->slotSize) size = vcam::PackSize(m_width, m_height);
         header->frameBytes = vcam::FrameBytes;
         header->latestSlot = 0;
         MemoryBarrier();
@@ -78,7 +75,7 @@ void FrameWriter::EndFrame(LONG slot, bool shared, const uint8_t* y, const uint8
     if (shared)
     {
         auto header = reinterpret_cast<vcam::SharedHeader*>(m_view);
-        MemoryBarrier();
+        InterlockedExchange64(&header->slotSize[slot], vcam::PackSize(m_width, m_height));
         InterlockedExchange(&header->latestSlot, slot);
         InterlockedIncrement64(&header->frameCounter);
         InterlockedExchange64(&header->lastWriteTick, static_cast<LONG64>(GetTickCount64()));
@@ -88,6 +85,7 @@ void FrameWriter::EndFrame(LONG slot, bool shared, const uint8_t* y, const uint8
 
 void FrameWriter::Write(const DecodedFrame& frame)
 {
+    const uint32_t W = m_width, H = m_height;
     if (frame.width < 2 || frame.height < 2 || !frame.y) return;
 
     LONG slot;
@@ -102,6 +100,7 @@ void FrameWriter::Write(const DecodedFrame& frame)
 
 void FrameWriter::WriteOutput(const uint8_t* y, UINT yPitch, const uint8_t* uv, UINT uvPitch)
 {
+    const uint32_t W = m_width, H = m_height;
     LONG slot;
     bool shared;
     uint8_t* dstY = BeginFrame(slot, shared);
@@ -116,6 +115,7 @@ void FrameWriter::WriteOutput(const uint8_t* y, UINT yPitch, const uint8_t* uv, 
 
 void FrameWriter::Scale(const DecodedFrame& frame, uint8_t* dstY, uint8_t* dstUV)
 {
+    const uint32_t W = m_width, H = m_height;
     if (frame.width == W && frame.height == H)
     {
         for (uint32_t y = 0; y < H; ++y)
@@ -185,6 +185,7 @@ void FrameWriter::Scale(const DecodedFrame& frame, uint8_t* dstY, uint8_t* dstUV
 
 void FrameWriter::ApplyTransform(uint8_t* y, uint8_t* uv)
 {
+    const uint32_t W = m_width, H = m_height;
     // Rotate 180 = flip both axes, so mirror + rotate 180 is a vertical flip only.
     const bool flipH = m_mirror != m_rotate180;
     const bool flipV = m_rotate180;
@@ -216,19 +217,21 @@ void FrameWriter::ApplyTransform(uint8_t* y, uint8_t* uv)
 void FrameWriter::UpdatePreview(const uint8_t* y, const uint8_t* uv)
 {
     constexpr uint32_t PW = IPWC_PREVIEW_WIDTH, PH = IPWC_PREVIEW_HEIGHT;
-    constexpr uint32_t Step = W / PW; // 4
+    const uint32_t W = m_width, H = m_height;
 
     std::lock_guard lock(m_previewLock);
     for (uint32_t py = 0; py < PH; ++py)
     {
-        const uint8_t* yRow = y + static_cast<size_t>(py * Step + Step / 2) * W;
-        const uint8_t* uvRow = uv + static_cast<size_t>(py * Step / 2) * W;
+        const uint32_t sy = (py * 2 + 1) * H / (PH * 2);
+        const uint8_t* yRow = y + static_cast<size_t>(sy) * W;
+        const uint8_t* uvRow = uv + static_cast<size_t>(sy / 2) * W;
         uint8_t* out = m_preview.data() + static_cast<size_t>(py) * PW * 4;
         for (uint32_t px = 0; px < PW; ++px)
         {
+            const uint32_t sx = (px * 2 + 1) * W / (PW * 2);
             // BT.709 limited range -> RGB
-            int c = (yRow[px * Step + Step / 2] - 16) * 298;
-            const uint8_t* chroma = uvRow + static_cast<size_t>(px * Step / 2) * 2;
+            int c = (yRow[sx] - 16) * 298;
+            const uint8_t* chroma = uvRow + static_cast<size_t>(sx / 2) * 2;
             int d = chroma[0] - 128, e = chroma[1] - 128;
             out[px * 4 + 0] = Clamp((c + 541 * d + 128) >> 8);
             out[px * 4 + 1] = Clamp((c - 55 * d - 136 * e + 128) >> 8);

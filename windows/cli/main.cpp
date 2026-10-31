@@ -34,8 +34,20 @@ namespace
                 L"  --framing          Auto-framing tightness: 0 = wide, 100 = tight (default 50)\n"
                 L"  --redness          Reduce facial redness, 0-100 %%\n"
                 L"  --smooth           Smooth skin, 0-100 %%\n"
+                L"  --format <f>       Output format: 2160p30, 1080p60, 1080p30 (default), 720p60 or 720p30\n"
+                L"  --frame-once       Frame the face once after connecting and keep that framing\n"
                 L"  --snapshot <file>  Save the processed preview (960x540 BMP) after --seconds and exit\n"
                 L"  --seconds <n>      Delay before --snapshot (default 5)\n");
+    }
+
+    bool ParseFormat(const std::wstring& text, int32_t& width, int32_t& height, int32_t& fps)
+    {
+        int lines = 0, rate = 0;
+        if (swscanf_s(text.c_str(), L"%dp%d", &lines, &rate) != 2) return false;
+        height = lines;
+        width = lines * 16 / 9;
+        fps = rate;
+        return true;
     }
 
     bool SaveBmp(const std::wstring& path, const std::vector<uint8_t>& bgra, int32_t w, int32_t h)
@@ -87,6 +99,8 @@ int wmain(int argc, wchar_t** argv)
     float framing = 0.5f, redness = 0, smooth = 0;
     std::wstring snapshot;
     int snapshotSeconds = 5;
+    int32_t formatWidth = 1920, formatHeight = 1080, formatFps = 30;
+    bool frameOnce = false;
     for (int i = 1; i < argc; ++i)
     {
         std::wstring arg = argv[i];
@@ -101,6 +115,8 @@ int wmain(int argc, wchar_t** argv)
         else if (arg == L"--framing" && i + 1 < argc) framing = _wtoi(argv[++i]) / 100.0f;
         else if (arg == L"--redness" && i + 1 < argc) redness = _wtoi(argv[++i]) / 100.0f;
         else if (arg == L"--smooth" && i + 1 < argc) smooth = _wtoi(argv[++i]) / 100.0f;
+        else if (arg == L"--format" && i + 1 < argc && ParseFormat(argv[i + 1], formatWidth, formatHeight, formatFps)) ++i;
+        else if (arg == L"--frame-once") frameOnce = true;
         else if (arg == L"--snapshot" && i + 1 < argc) { snapshot = argv[++i]; previewTest = true; }
         else if (arg == L"--seconds" && i + 1 < argc) snapshotSeconds = _wtoi(argv[++i]);
         else
@@ -122,6 +138,14 @@ int wmain(int argc, wchar_t** argv)
     IPWC_SetPreviewEnabled(previewTest);
     IPWC_SetAutoFraming(autoFrame, framing);
     IPWC_SetRetouch(redness, smooth);
+    hr = IPWC_SetOutputFormat(formatWidth, formatHeight, formatFps);
+    if (FAILED(hr))
+    {
+        wprintf(L"Unsupported format %dx%d@%d\n", formatWidth, formatHeight, formatFps);
+        IPWC_Shutdown();
+        return 1;
+    }
+    if (frameOnce) IPWC_FrameOnce();
 
     if (!noCamera)
     {
@@ -180,6 +204,8 @@ int wmain(int argc, wchar_t** argv)
                     status.bitrateKbps / 1000.0, status.hardwareDecode ? L"GPU" : L"CPU", CameraName(status.camera));
             if (previewTest) wprintf(L"  preview: %d fps", previewFrames);
             if (status.faces >= 0) wprintf(L"  faces: %d", status.faces);
+            static const wchar_t* framingNames[] = { L"off", L"follow", L"hold", L"pending" };
+            if (status.framing >= 0 && status.framing <= 3) wprintf(L"  framing: %s", framingNames[status.framing]);
             if (!status.effectsAvailable) wprintf(L"  (effects unavailable)");
             wprintf(L"\n");
         }

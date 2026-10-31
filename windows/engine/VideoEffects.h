@@ -9,20 +9,23 @@
 
 class GpuDevice;
 
-// GPU pass that turns a decoded NV12 frame into the virtual camera's 4K NV12 output:
-// auto-framing crop + scaling, letterboxing, mirror/rotate and face retouching (skin smoothing on
+// GPU pass that turns a decoded NV12 frame into the virtual camera's NV12 output (format chosen by the
+// user): framing crop + scaling, letterboxing, mirror/rotate and face retouching (skin smoothing on
 // luma, redness reduction on chroma), all in two pixel-shader passes.
 class VideoEffects
 {
 public:
-    // Planes of the final 4K output, valid during the callback.
+    // Planes of the final output, valid during the callback.
     using OutputCallback = std::function<void(const uint8_t* y, UINT yPitch, const uint8_t* uv, UINT uvPitch)>;
 
     HRESULT Initialize(GpuDevice* gpu, UINT outputWidth, UINT outputHeight);
+    // Changes the output size (call from the processing thread).
+    HRESULT SetOutputSize(UINT width, UINT height);
     bool IsReady() const { return m_ready; }
     HRESULT Process(const DecodedFrame& frame, const FrameParams& params, const OutputCallback& onOutput);
 
 private:
+    HRESULT CreateOutputs(UINT width, UINT height);
     HRESULT EnsureInput(UINT width, UINT height);
     HRESULT Upload(const DecodedFrame& frame);
 

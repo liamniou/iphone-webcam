@@ -213,16 +213,37 @@ HRESULT VideoEffects::Initialize(GpuDevice* gpu, UINT outputWidth, UINT outputHe
     hr = device->CreateBuffer(&cb, nullptr, &m_constants);
     if (FAILED(hr)) return hr;
 
-    hr = CreateTexture(device, m_outW, m_outH, DXGI_FORMAT_R8_UNORM, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0, m_outY);
-    if (SUCCEEDED(hr)) hr = CreateTexture(device, m_outW / 2, m_outH / 2, DXGI_FORMAT_R8G8_UNORM, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0, m_outUV);
-    if (SUCCEEDED(hr)) hr = CreateTexture(device, m_outW, m_outH, DXGI_FORMAT_R8_UNORM, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, m_readY);
-    if (SUCCEEDED(hr)) hr = CreateTexture(device, m_outW / 2, m_outH / 2, DXGI_FORMAT_R8G8_UNORM, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, m_readUV);
-    if (SUCCEEDED(hr)) hr = device->CreateRenderTargetView(m_outY.Get(), nullptr, &m_rtvY);
-    if (SUCCEEDED(hr)) hr = device->CreateRenderTargetView(m_outUV.Get(), nullptr, &m_rtvUV);
+    hr = CreateOutputs(outputWidth, outputHeight);
     if (FAILED(hr)) return hr;
 
     m_ready = true;
     return S_OK;
+}
+
+HRESULT VideoEffects::CreateOutputs(UINT width, UINT height)
+{
+    ID3D11Device* device = m_gpu->Device();
+    m_rtvY.Reset();
+    m_rtvUV.Reset();
+    HRESULT hr = CreateTexture(device, width, height, DXGI_FORMAT_R8_UNORM, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0, m_outY);
+    if (SUCCEEDED(hr)) hr = CreateTexture(device, width / 2, height / 2, DXGI_FORMAT_R8G8_UNORM, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0, m_outUV);
+    if (SUCCEEDED(hr)) hr = CreateTexture(device, width, height, DXGI_FORMAT_R8_UNORM, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, m_readY);
+    if (SUCCEEDED(hr)) hr = CreateTexture(device, width / 2, height / 2, DXGI_FORMAT_R8G8_UNORM, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, m_readUV);
+    if (SUCCEEDED(hr)) hr = device->CreateRenderTargetView(m_outY.Get(), nullptr, &m_rtvY);
+    if (SUCCEEDED(hr)) hr = device->CreateRenderTargetView(m_outUV.Get(), nullptr, &m_rtvUV);
+    if (FAILED(hr)) return hr;
+    m_outW = width;
+    m_outH = height;
+    return S_OK;
+}
+
+HRESULT VideoEffects::SetOutputSize(UINT width, UINT height)
+{
+    if (!m_ready) return E_UNEXPECTED;
+    if (width == m_outW && height == m_outH) return S_OK;
+    HRESULT hr = CreateOutputs(width, height);
+    if (FAILED(hr)) m_ready = false;
+    return hr;
 }
 
 HRESULT VideoEffects::EnsureInput(UINT width, UINT height)

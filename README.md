@@ -3,11 +3,11 @@
 [![Build](https://github.com/liamniou/iphone-webcam/actions/workflows/build.yml/badge.svg)](https://github.com/liamniou/iphone-webcam/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Use your iPhone as a **4K 30 fps webcam** for Windows 11 over Wi-Fi — a small, open-source alternative to Camo Studio.
+Use your iPhone as a **4K webcam** (or 1080p/720p at 60 fps) for Windows 11 over Wi-Fi — a small, open-source alternative to Camo Studio.
 The iPhone streams H.264 video to a desktop app that feeds a virtual camera called **iPhone Webcam**, which you can pick in Zoom, Teams, Google Meet, OBS, Discord, the Windows Camera app, …
 
-- 3840×2160, 1920×1080 or 1280×720 at 30 fps (the app using the camera picks the size)
-- **Auto-framing**: zooms in and smoothly follows your face (like Center Stage), from wide to tight framing
+- Choose the resolution: **4K 30 fps, 1080p 60/30 fps or 720p 60/30 fps** — the iPhone captures and the camera provides exactly that
+- **Auto-framing** follows your face (like Center Stage), or **Frame me** zooms in once on demand and keeps that framing
 - **Retouch**: reduce facial redness and smooth skin — applied only to skin on your face
 - GPU-accelerated decoding and effects, low latency, automatic discovery and reconnection
 - Desktop app with live preview, status, mirror/rotate, system tray (*Close to tray*) and *Start with Windows*
@@ -16,7 +16,7 @@ The iPhone streams H.264 video to a desktop app that feeds a virtual camera call
 ## Requirements
 
 - **Windows 11** (x64 or ARM64). The virtual camera API doesn't exist on Windows 10.
-- **iPhone** with iOS 16 or later. 4K needs an iPhone 6s or newer (back camera) / iPhone 11 or newer (front camera); otherwise it streams 1080p.
+- **iPhone** with iOS 16 or later. 4K needs an iPhone 6s or newer (back camera) / iPhone 11 or newer (front camera), 60 fps an iPhone 6s or newer; if the camera can't do the chosen format, the iPhone sends the closest one it supports.
 - PC and iPhone on the **same Wi-Fi network** (5 GHz recommended; the PC may be on Ethernet).
 - A free **Apple ID** to install the iPhone app.
 
@@ -173,20 +173,36 @@ More help: [official AltStore troubleshooting guide](https://faq.altstore.io/alt
 1. Start **iPhone Webcam** on the PC and open the app on the iPhone. The PC finds the phone automatically and connects; the preview appears in the desktop app.
    To pick another phone, use the **Device** list in the left panel. If the phone isn't found (some routers block discovery), click **Connect by IP address…** and enter the IP shown in the iPhone app.
 2. Mount the iPhone in **landscape** (either direction — the image is kept upright). The app must stay open in the foreground; the screen won't auto-lock.
-3. In your video app choose the camera **iPhone Webcam**. Apps such as Teams or Zoom usually pick 1080p/720p; in OBS or the Windows Camera app you can select 3840×2160.
+3. In your video app choose the camera **iPhone Webcam**.
 
-The desktop app follows the Windows 11 look (light or dark, matching Windows): the **left panel** holds the device and the effects, the **title bar** shows whether an app is using the camera and the received resolution/frame rate, and the **status panel** on the right (toggle with the panel button in the title bar) shows connection details. The **gear** button opens **Settings**: app theme, *Run at startup*, *Close to tray*, connect by IP, automatic reconnection, GPU decoding and camera status (Ctrl+1…4 switch between its pages).
+The desktop app follows the Windows 11 look (light or dark, matching Windows): the **left panel** holds the device and the effects, the **title bar** shows whether an app is using the camera and the chosen resolution, and the **status panel** on the right (toggle with the panel button in the title bar) shows connection details. The **gear** button opens **Settings**: app theme, *Run at startup*, *Close to tray*, connect by IP, automatic reconnection, resolution, GPU decoding and camera status (Ctrl+1…4 switch between its pages).
 
 Closing the window keeps the camera running in the **system tray**; right-click the tray icon to show or hide the window, switch or disconnect the iPhone, open Settings or quit. Turn off **Close to tray** in Settings if you'd rather have the × button quit the app. The camera switch button on the iPhone toggles front/back camera.
 
-### Auto-framing and retouch
+### Resolution
+
+Click the resolution button in the title bar (e.g. **1080p 30FPS**) or use *Settings → Video → Resolution*:
+
+| Format | Wi-Fi bandwidth | Good for |
+|--------|-----------------|----------|
+| 4K · 30 fps | ~30 Mbit/s | Sharpest picture (OBS, recordings) |
+| 1080p · 60 fps | ~15 Mbit/s | Smooth motion |
+| **1080p · 30 fps** (default) | ~7.5 Mbit/s | Works with every video app |
+| 720p · 60 fps | ~6.6 Mbit/s | Smooth motion on slower Wi-Fi |
+| 720p · 30 fps | ~3.3 Mbit/s | Lowest bandwidth |
+
+The iPhone switches its camera to that format and the virtual camera offers exactly that size and frame rate to apps. An app that is already using the camera keeps its current format (scaled) until it turns its camera off and on.
+
+### Framing and retouch
 
 The iPhone app detects faces (Apple's Vision framework, a few times per second) and sends their positions to the PC, where the effects are applied on the GPU to the final picture — so they work in every video app.
 
-- **Auto-framing**: the picture zooms in and smoothly pans to keep your face (or all faces) well framed, and zooms back out a couple of seconds after nobody is visible. The slider goes from *Wide* (head and shoulders) to *Tight* (head fills the picture); zoom is limited to 3× so the 4K picture stays sharp at 1080p.
+- **Follow my face** (auto-framing): the picture zooms in and smoothly pans to keep your face (or all faces) well framed, and zooms back out a couple of seconds after nobody is visible.
+- **Frame me**: zooms in on your face once and keeps that framing — it doesn't follow you, which is calmer if you move around a bit. Click it again to re-frame, or **Reset** to zoom back out.
+- The slider goes from *Wide* (head and shoulders) to *Tight* (head fills the picture) for both; zoom is limited to 3×.
 - **Retouch**: **Reduce redness** evens out a red complexion; **Smooth skin** softens skin texture while keeping eyes, hair and edges sharp. Both only touch skin-coloured pixels inside the detected face area, so red clothes or objects stay as they are. (With an older iPhone app version that doesn't send face positions, retouching applies to all skin-coloured pixels.)
 
-Effects need a DirectX 11 graphics card (any PC that runs Windows 11 has one); the line under the *Auto-framing* slider shows whether a face is detected.
+Effects need a DirectX 11 graphics card (any PC that runs Windows 11 has one); the line under the framing slider shows whether a face is detected.
 
 ## Troubleshooting
 
@@ -196,10 +212,12 @@ Effects need a DirectX 11 graphics card (any PC that runs Windows 11 has one); t
 | Red banner "The virtual camera isn't available" | Reinstall with the setup program (it registers the camera). Windows 11 is required. |
 | The phone doesn't appear in the list | Same network? App open on the iPhone? *Settings → Privacy & Security → Local Network → iPhone Webcam* enabled? Guest/public Wi-Fi often isolates devices. Use *Connect by IP address*. |
 | Video apps show a gray picture | The desktop app isn't receiving video — check its status panel. |
-| Choppy video / freezes | 4K needs ~30 Mbit/s: move closer to the router, use 5/6 GHz Wi-Fi, connect the PC by Ethernet. |
+| Choppy video / freezes | Choose a lower resolution (title bar button), move closer to the router, use 5/6 GHz Wi-Fi, connect the PC by Ethernet. |
 | Decoder shows `CPU (software)` and < 30 fps | GPU decoding isn't available: update the graphics driver. |
-| Auto-framing shows "Face detection needs the latest iPhone app" | Install the current `.ipa` on the iPhone. |
-| Auto-framing doesn't zoom | Make sure the face is detected (status under *Auto-framing*); a face that already fills much of the picture needs little or no zoom — try *Tight*. |
+| A video app still uses the old resolution | Apps keep the format they opened the camera with: turn the camera off and on in the app. |
+| The status shows a lower resolution or frame rate than chosen | That iPhone camera doesn't support the chosen format (e.g. 60 fps on an older front camera) and sends the closest one; the PC scales it. Or the iPhone app is older than 1.3 — update it. |
+| "Face detection needs the latest iPhone app" | Install the current `.ipa` on the iPhone. |
+| Framing doesn't zoom | Make sure the face is detected (line under the framing slider); a face that already fills much of the picture needs little or no zoom — try *Tight*. |
 | The iPhone app stopped opening | The 7-day free signing expired — sideload it again. |
 
 ## Build from source
@@ -221,12 +239,14 @@ Testing without an iPhone:
 
 ```powershell
 .\build\x64\native\FakePhone.exe --width 3840 --height 2160   # moving 4K test pattern with a synthetic face on 127.0.0.1:5005
-                                                              # (--face-size 0.15, --no-faces: no face data, --no-face: plain pattern)
+                                                              # follows format requests like the iPhone (--fixed-format: ignore them);
+                                                              # --face-size 0.15, --still-face, --no-faces: no face data, --no-face: plain pattern
 # Run the desktop app next to an installed copy, without touching the real virtual camera:
 .\build\x64\app\IPhoneWebcam.exe --dev                        # then connect to 127.0.0.1
 # or headless, saving the processed picture:
-.\build\x64\app\IPhoneWebcamCli.exe --ip 127.0.0.1 --no-camera --autoframe --framing 70 --redness 80 --smooth 60 --snapshot out.bmp
-.\build\x64\native\CaptureTest.exe capture.png 90 3840        # opens the virtual camera, prints fps, saves a frame
+.\build\x64\app\IPhoneWebcamCli.exe --ip 127.0.0.1 --no-camera --format 1080p60 --frame-once --redness 80 --smooth 60 --snapshot out.bmp
+.\build\x64\native\CaptureTest.exe capture.png 90             # opens the virtual camera, prints the offered format and fps, saves a frame
+.\build\x64\native\CaptureTest.exe capture.png 90 0 .\build\x64\native\IPhoneWebcamSource.dll   # same, loading the camera source in-process
 ```
 </details>
 
@@ -269,9 +289,11 @@ git tag v1.2.3 && git push origin v1.2.3
 | [windows/tools/](windows/tools/) | `FakePhone` (test stream server) and `CaptureTest` (reads from the virtual camera) |
 
 **Protocol.** The iPhone listens on TCP port 5005 and advertises `_iphonewebcam._tcp` via Bonjour. Each message is `uint32 big-endian length | uint8 type | payload`:
-type `1` = H.264 access unit (Annex B; keyframes carry SPS/PPS), type `2` = face detections (`uint8 count`, then `count × (x, y, w, h)` as little-endian float32, normalized to the video frame, origin top-left; sent ~6×/s). Receivers ignore unknown types. The PC can send the byte `K` to request a keyframe. When the network can't keep up, the phone drops frames until the next keyframe.
+type `1` = H.264 access unit (Annex B; keyframes carry SPS/PPS), type `2` = face detections (`uint8 count`, then `count × (x, y, w, h)` as little-endian float32, normalized to the video frame, origin top-left; sent ~6×/s). Receivers ignore unknown types. The PC sends `K` to request a keyframe and `F` + `uint16 BE width` + `uint16 BE height` + `uint8 fps` to select the capture format. When the network can't keep up, the phone drops frames until the next keyframe.
 
-**Effects pipeline.** Decoded frames stay on the GPU: two pixel-shader passes produce the final 4K NV12 picture — crop/zoom from the face tracker, letterboxing, mirror/rotate, bilateral skin smoothing on luma and redness reduction on chroma, masked by a YCbCr skin-tone classifier and the (motion-extrapolated) face ellipses ([VideoEffects.cpp](windows/engine/VideoEffects.cpp), [FaceTracker.cpp](windows/engine/FaceTracker.cpp)).
+**Virtual camera format.** The app that registered the camera writes the chosen format to `%ProgramData%\IPhoneWebcam\camera-format.txt`; the camera source (running in the Windows Camera Frame Server as LOCAL SERVICE) offers exactly that format. Because the Frame Server keeps a camera source alive while the camera is registered, the engine re-registers the camera after a format change as soon as no app is using it. Installers stop the Frame Server service so an updated camera DLL is loaded (Windows restarts it on demand).
+
+**Effects pipeline.** Decoded frames stay on the GPU: two pixel-shader passes produce the final NV12 picture at the chosen output size — crop/zoom from the face tracker (follow or on-demand hold), letterboxing, mirror/rotate, bilateral skin smoothing on luma and redness reduction on chroma, masked by a YCbCr skin-tone classifier and the (motion-extrapolated) face ellipses ([VideoEffects.cpp](windows/engine/VideoEffects.cpp), [FaceTracker.cpp](windows/engine/FaceTracker.cpp)).
 
 **Limitations / ideas.** Wi-Fi only (USB would need usbmuxd-style forwarding); no audio; no zoom/focus/exposure controls; HEVC would halve bandwidth but Windows needs the paid HEVC extension to decode it.
 

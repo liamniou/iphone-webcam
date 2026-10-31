@@ -7,10 +7,9 @@
 namespace
 {
     constexpr DWORD StreamId = 0;
-    constexpr LONGLONG FrameDuration = 10'000'000LL / vcam::FrameRate; // 100 ns units
     constexpr ULONGLONG StaleFrameMs = 2000;
 
-    HRESULT CreateVideoMediaType(UINT32 width, UINT32 height, IMFMediaType** result)
+    HRESULT CreateVideoMediaType(UINT32 width, UINT32 height, UINT32 fps, IMFMediaType** result)
     {
         ComPtr<IMFMediaType> type;
         HRESULT hr = MFCreateMediaType(&type);
@@ -20,14 +19,14 @@ namespace
         type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
         type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_NV12);
         MFSetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, width, height);
-        MFSetAttributeRatio(type.Get(), MF_MT_FRAME_RATE, vcam::FrameRate, 1);
+        MFSetAttributeRatio(type.Get(), MF_MT_FRAME_RATE, fps, 1);
         MFSetAttributeRatio(type.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
         type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
         type->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
         type->SetUINT32(MF_MT_FIXED_SIZE_SAMPLES, TRUE);
         type->SetUINT32(MF_MT_DEFAULT_STRIDE, width);
         type->SetUINT32(MF_MT_SAMPLE_SIZE, sampleSize);
-        type->SetUINT32(MF_MT_AVG_BITRATE, sampleSize * 8 * vcam::FrameRate);
+        type->SetUINT32(MF_MT_AVG_BITRATE, sampleSize * 8 * fps);
 
         *result = type.Detach();
         return S_OK;
@@ -66,8 +65,7 @@ bool SharedFrameReader::EnsureOpen()
     auto header = reinterpret_cast<vcam::SharedHeader*>(m_view);
     if (header->magic != vcam::SharedMagic)
     {
-        header->width = vcam::FrameWidth;
-        header->height = vcam::FrameHeight;
+        for (auto& size : header->slotSize) size = vcam::PackSize(vcam::FrameWidth, vcam::FrameHeight);
         header->frameBytes = vcam::FrameBytes;
         header->latestSlot = 0;
         header->frameCounter = 0;
@@ -99,10 +97,10 @@ void SharedFrameReader::FillPlaceholder(BYTE* dst, LONG pitch, UINT32 width, UIN
     }
 }
 
-void SharedFrameReader::Downscale(const BYTE* src, BYTE* dst, LONG pitch, UINT32 width, UINT32 height, UINT32 factor)
+void SharedFrameReader::Downscale(const BYTE* src, UINT32 srcW, UINT32 srcH, BYTE* dst, LONG pitch,
+                                  UINT32 width, UINT32 height, UINT32 factor)
 {
     // Box filter: each output sample is the average of a factor x factor block.
-    const UINT32 srcW = vcam::FrameWidth;
     const UINT32 area = factor * factor;
     for (UINT32 y = 0; y < height; ++y)
     {
@@ -120,7 +118,7 @@ void SharedFrameReader::Downscale(const BYTE* src, BYTE* dst, LONG pitch, UINT32
         }
     }
 
-    const BYTE* srcUV = src + static_cast<size_t>(srcW) * vcam::FrameHeight;
+    const BYTE* srcUV = src + static_cast<size_t>(srcW) * srcH;
     BYTE* dstUV = dst + static_cast<LONG_PTR>(height) * pitch;
     for (UINT32 y = 0; y < height / 2; ++y)
     {
@@ -144,34 +142,70 @@ void SharedFrameReader::Downscale(const BYTE* src, BYTE* dst, LONG pitch, UINT32
     }
 }
 
+void SharedFrameReader::ScaleBilinear(const BYTE* src, UINT32 srcW, UINT32 srcH, BYTE* dst, LONG pitch,
+                                      UINT32 width, UINT32 height)
+{
+    // Used only while an app keeps an older format after the user changed it (rare, so simple).
+    auto plane = [](const BYTE* s, UINT32 sw, UINT32 sh, BYTE* d, LONG dpitch, UINT32 dw, UINT32 dh, UINT32 channels) {
+        for (UINT32 y = 0; y < dh; ++y)
+        {
+            float fy = std::max(0.0f, (y + 0.5f) * sh / dh - 0.5f);
+            UINT32 y0 = std::min(static_cast<UINT32>(fy), sh - 1), y1 = std::min(y0 + 1, sh - 1);
+            float wy = fy - y0;
+            const BYTE* r0 = s + static_cast<size_t>(y0) * sw * channels;
+            const BYTE* r1 = s + static_cast<size_t>(y1) * sw * channels;
+            BYTE* out = d + static_cast<LONG_PTR>(y) * dpitch;
+            for (UINT32 x = 0; x < dw; ++x)
+            {
+                float fx = std::max(0.0f, (x + 0.5f) * sw / dw - 0.5f);
+                UINT32 x0 = std::min(static_cast<UINT32>(fx), sw - 1), x1 = std::min(x0 + 1, sw - 1);
+                float wx = fx - x0;
+                for (UINT32 c = 0; c < channels; ++c)
+                {
+                    float top = r0[x0 * channels + c] * (1 - wx) + r0[x1 * channels + c] * wx;
+                    float bottom = r1[x0 * channels + c] * (1 - wx) + r1[x1 * channels + c] * wx;
+                    out[x * channels + c] = static_cast<BYTE>(top * (1 - wy) + bottom * wy + 0.5f);
+                }
+            }
+        }
+    };
+    plane(src, srcW, srcH, dst, pitch, width, height, 1);
+    plane(src + static_cast<size_t>(srcW) * srcH, srcW / 2, srcH / 2,
+          dst + static_cast<LONG_PTR>(height) * pitch, pitch, width / 2, height / 2, 2);
+}
+
 bool SharedFrameReader::Fill(BYTE* dst, LONG pitch, UINT32 width, UINT32 height)
 {
-    const UINT32 factor = width ? vcam::FrameWidth / width : 0;
-    const bool supported = factor > 0 && width * factor == vcam::FrameWidth && height * factor == vcam::FrameHeight;
-
-    if (supported && EnsureOpen())
+    if (width >= 2 && height >= 2 && EnsureOpen())
     {
         auto header = reinterpret_cast<vcam::SharedHeader*>(m_view);
         InterlockedExchange64(&header->lastReadTick, static_cast<LONG64>(GetTickCount64()));
         ULONGLONG lastWrite = static_cast<ULONGLONG>(header->lastWriteTick);
         if (header->magic == vcam::SharedMagic && header->frameCounter > 0 &&
-            GetTickCount64() - lastWrite < StaleFrameMs &&
-            header->width == vcam::FrameWidth && header->height == vcam::FrameHeight)
+            GetTickCount64() - lastWrite < StaleFrameMs)
         {
-            LONG slot = header->latestSlot;
-            if (slot >= 0 && slot < static_cast<LONG>(vcam::SlotCount))
+            const LONG slot = header->latestSlot;
+            const LONG64 size = slot >= 0 && slot < static_cast<LONG>(vcam::SlotCount)
+                ? InterlockedCompareExchange64(&header->slotSize[slot], 0, 0) : 0;
+            const UINT32 srcW = vcam::PackedWidth(size), srcH = vcam::PackedHeight(size);
+            if (srcW >= 2 && srcH >= 2 && srcW <= vcam::FrameWidth && srcH <= vcam::FrameHeight)
             {
                 const BYTE* src = m_view + vcam::SlotOffset(slot);
-                if (factor == 1)
+                const UINT32 factor = srcW / width;
+                if (srcW == width && srcH == height)
                 {
                     for (UINT32 y = 0; y < height * 3 / 2; ++y)
                     {
                         memcpy(dst + static_cast<LONG_PTR>(y) * pitch, src + static_cast<size_t>(y) * width, width);
                     }
                 }
+                else if (factor > 1 && width * factor == srcW && height * factor == srcH)
+                {
+                    Downscale(src, srcW, srcH, dst, pitch, width, height, factor);
+                }
                 else
                 {
-                    Downscale(src, dst, pitch, width, height, factor);
+                    ScaleBilinear(src, srcW, srcH, dst, pitch, width, height);
                 }
                 return true;
             }
@@ -328,22 +362,36 @@ IFACEMETHODIMP MediaStream::RequestSample(IUnknown* token)
 
     std::lock_guard sampleLock(m_sampleLock);
 
-    // Pace delivery to the nominal frame rate in case the consumer pulls faster.
+    // Pace delivery to the nominal frame rate in case the consumer pulls faster. Frames are scheduled
+    // on an absolute timeline (so oversleeping doesn't accumulate) and waited for with a
+    // high-resolution timer (plain Sleep() has ~15.6 ms granularity, too coarse for 60 fps).
+    LONGLONG frameDuration;
+    {
+        std::lock_guard lock(m_lock);
+        frameDuration = m_frameDuration;
+    }
     LONGLONG now = MFGetSystemTime();
+    if (m_nextSampleTime == 0 || now - m_nextSampleTime > 2 * frameDuration || m_nextSampleTime - now > 2 * frameDuration)
+    {
+        m_nextSampleTime = now;
+    }
     if (m_nextSampleTime > now)
     {
-        Sleep(static_cast<DWORD>((m_nextSampleTime - now) / 10'000));
+        if (!m_timer) m_timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        LARGE_INTEGER due;
+        due.QuadPart = -(m_nextSampleTime - now); // relative, 100 ns units
+        if (m_timer && SetWaitableTimer(m_timer, &due, 0, nullptr, nullptr, FALSE)) WaitForSingleObject(m_timer, 1000);
+        else Sleep(static_cast<DWORD>((m_nextSampleTime - now) / 10'000));
         now = MFGetSystemTime();
     }
-    m_nextSampleTime = std::max(now, m_nextSampleTime) + FrameDuration;
-    if (m_nextSampleTime - now > 2 * FrameDuration) m_nextSampleTime = now + FrameDuration;
+    m_nextSampleTime += frameDuration;
 
     ComPtr<IMFSample> sample;
     HRESULT hr = CreateSample(&sample);
     if (FAILED(hr)) return hr;
 
     sample->SetSampleTime(now);
-    sample->SetSampleDuration(FrameDuration);
+    sample->SetSampleDuration(frameDuration);
     if (token) sample->SetUnknown(MFSampleExtension_Token, token);
 
     std::lock_guard lock(m_lock);
@@ -414,6 +462,11 @@ HRESULT MediaStream::Start(IMFMediaType* mediaType)
         m_mediaType = mediaType;
         m_width = width;
         m_height = height;
+        UINT32 numerator = 0, denominator = 0;
+        if (SUCCEEDED(MFGetAttributeRatio(mediaType, MF_MT_FRAME_RATE, &numerator, &denominator)) && numerator > 0 && denominator > 0)
+        {
+            m_frameDuration = 10'000'000LL * denominator / numerator;
+        }
     }
 
     if (m_allocator && !m_allocatorInitialized)
@@ -494,38 +547,49 @@ HRESULT MediaSource::RuntimeClassInitialize(IMFAttributes* activateAttributes)
     if (FAILED(hr)) return hr;
     if (activateAttributes) activateAttributes->CopyAllItems(m_attributes.Get());
 
-    std::vector<ComPtr<IMFMediaType>> types;
-    std::vector<IMFMediaType*> typePointers;
-    for (const auto& format : vcam::OfferedFormats)
-    {
-        ComPtr<IMFMediaType> type;
-        hr = CreateVideoMediaType(format.width, format.height, &type);
-        if (FAILED(hr)) return hr;
-        typePointers.push_back(type.Get());
-        types.push_back(std::move(type));
-    }
+    return BuildDescriptors(vcam::ReadCameraFormat());
+}
 
-    hr = MFCreateStreamDescriptor(StreamId, static_cast<DWORD>(typePointers.size()), typePointers.data(), &m_streamDescriptor);
+HRESULT MediaSource::BuildDescriptors(const vcam::CameraFormat& format)
+{
+    // The camera offers exactly the format chosen in the app.
+    ComPtr<IMFMediaType> type;
+    HRESULT hr = CreateVideoMediaType(format.width, format.height, format.fps, &type);
+    if (FAILED(hr)) return hr;
+
+    IMFMediaType* types[] = { type.Get() };
+    ComPtr<IMFStreamDescriptor> streamDescriptor;
+    hr = MFCreateStreamDescriptor(StreamId, ARRAYSIZE(types), types, &streamDescriptor);
     if (FAILED(hr)) return hr;
 
     ComPtr<IMFMediaTypeHandler> handler;
-    hr = m_streamDescriptor->GetMediaTypeHandler(&handler);
+    hr = streamDescriptor->GetMediaTypeHandler(&handler);
     if (FAILED(hr)) return hr;
-    hr = handler->SetCurrentMediaType(types.front().Get()); // 4K by default
-    if (FAILED(hr)) return hr;
-
-    m_streamDescriptor->SetGUID(MF_DEVICESTREAM_STREAM_CATEGORY, PINNAME_VIDEO_CAPTURE);
-    m_streamDescriptor->SetUINT32(MF_DEVICESTREAM_STREAM_ID, StreamId);
-    m_streamDescriptor->SetUINT32(MF_DEVICESTREAM_FRAMESERVER_SHARED, 1);
-    m_streamDescriptor->SetUINT32(MF_DEVICESTREAM_ATTRIBUTE_FRAMESOURCE_TYPES, MFFrameSourceTypes_Color);
-
-    IMFStreamDescriptor* descriptors[] = { m_streamDescriptor.Get() };
-    hr = MFCreatePresentationDescriptor(ARRAYSIZE(descriptors), descriptors, &m_presentationDescriptor);
-    if (FAILED(hr)) return hr;
-    hr = m_presentationDescriptor->SelectStream(0);
+    hr = handler->SetCurrentMediaType(type.Get());
     if (FAILED(hr)) return hr;
 
-    return Microsoft::WRL::MakeAndInitialize<MediaStream>(&m_stream, this, m_streamDescriptor.Get());
+    streamDescriptor->SetGUID(MF_DEVICESTREAM_STREAM_CATEGORY, PINNAME_VIDEO_CAPTURE);
+    streamDescriptor->SetUINT32(MF_DEVICESTREAM_STREAM_ID, StreamId);
+    streamDescriptor->SetUINT32(MF_DEVICESTREAM_FRAMESERVER_SHARED, 1);
+    streamDescriptor->SetUINT32(MF_DEVICESTREAM_ATTRIBUTE_FRAMESOURCE_TYPES, MFFrameSourceTypes_Color);
+
+    IMFStreamDescriptor* descriptors[] = { streamDescriptor.Get() };
+    ComPtr<IMFPresentationDescriptor> presentationDescriptor;
+    hr = MFCreatePresentationDescriptor(ARRAYSIZE(descriptors), descriptors, &presentationDescriptor);
+    if (FAILED(hr)) return hr;
+    hr = presentationDescriptor->SelectStream(0);
+    if (FAILED(hr)) return hr;
+
+    ComPtr<MediaStream> stream;
+    hr = Microsoft::WRL::MakeAndInitialize<MediaStream>(&stream, this, streamDescriptor.Get());
+    if (FAILED(hr)) return hr;
+
+    if (m_stream) m_stream->Shutdown();
+    m_stream = stream;
+    m_streamDescriptor = streamDescriptor;
+    m_presentationDescriptor = presentationDescriptor;
+    m_format = format;
+    return S_OK;
 }
 
 IFACEMETHODIMP MediaSource::BeginGetEvent(IMFAsyncCallback* callback, IUnknown* state)
@@ -570,6 +634,14 @@ IFACEMETHODIMP MediaSource::CreatePresentationDescriptor(IMFPresentationDescript
     std::lock_guard lock(m_lock);
     HRESULT hr = CheckShutdown();
     if (FAILED(hr)) return hr;
+
+    // A new client is opening the camera: pick up a format change made in the app meanwhile
+    // (only while nobody is streaming, so running clients keep a consistent stream).
+    if (!m_streamActive)
+    {
+        vcam::CameraFormat format = vcam::ReadCameraFormat();
+        if (!(format == m_format)) BuildDescriptors(format);
+    }
     return m_presentationDescriptor->Clone(descriptor);
 }
 

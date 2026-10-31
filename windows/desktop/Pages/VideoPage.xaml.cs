@@ -5,21 +5,44 @@ namespace IPhoneWebcam.Desktop.Pages;
 
 public partial class VideoPage : Page
 {
-    private readonly bool _initializing;
+    private bool _initializing;
 
     public VideoPage()
     {
         InitializeComponent();
         _initializing = true;
         GpuSwitch.IsChecked = App.Controller.Settings.HardwareDecode;
+        FormatCombo.ItemsSource = VideoFormat.All;
+        FormatCombo.SelectedItem = App.Controller.Format;
+        FormatDescription.Text = App.Controller.Format.Description;
         _initializing = false;
 
         Loaded += (_, _) =>
         {
             App.Controller.Updated += Refresh;
+            App.Controller.FormatChanged += OnControllerFormatChanged;
             Refresh();
         };
-        Unloaded += (_, _) => App.Controller.Updated -= Refresh;
+        Unloaded += (_, _) =>
+        {
+            App.Controller.Updated -= Refresh;
+            App.Controller.FormatChanged -= OnControllerFormatChanged;
+        };
+    }
+
+    private void OnControllerFormatChanged()
+    {
+        _initializing = true;
+        FormatCombo.SelectedItem = App.Controller.Format;
+        FormatDescription.Text = App.Controller.Format.Description;
+        _initializing = false;
+    }
+
+    private void OnFormatChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_initializing || FormatCombo.SelectedItem is not VideoFormat format) return;
+        FormatDescription.Text = format.Description;
+        App.Controller.SetFormat(format);
     }
 
     private void Refresh()

@@ -30,7 +30,8 @@ public:
 private:
     bool EnsureOpen();
     static void FillPlaceholder(BYTE* dst, LONG pitch, UINT32 width, UINT32 height);
-    static void Downscale(const BYTE* src, BYTE* dst, LONG pitch, UINT32 width, UINT32 height, UINT32 factor);
+    static void Downscale(const BYTE* src, UINT32 srcW, UINT32 srcH, BYTE* dst, LONG pitch, UINT32 width, UINT32 height, UINT32 factor);
+    static void ScaleBilinear(const BYTE* src, UINT32 srcW, UINT32 srcH, BYTE* dst, LONG pitch, UINT32 width, UINT32 height);
 
     HANDLE m_map = nullptr;
     BYTE* m_view = nullptr;
@@ -77,12 +78,20 @@ private:
     ComPtr<IMFStreamDescriptor> m_descriptor;
     ComPtr<IMFMediaEventQueue> m_eventQueue;
     ComPtr<IMFMediaType> m_mediaType;
-    UINT32 m_width = vcam::FrameWidth;
-    UINT32 m_height = vcam::FrameHeight;
+    UINT32 m_width = vcam::DefaultFormat.width;
+    UINT32 m_height = vcam::DefaultFormat.height;
+    LONGLONG m_frameDuration = 10'000'000LL / vcam::DefaultFormat.fps; // 100 ns units
     ComPtr<IMFVideoSampleAllocatorEx> m_allocator;
     bool m_allocatorInitialized = false;
     SharedFrameReader m_reader;
     LONGLONG m_nextSampleTime = 0;
+    HANDLE m_timer = nullptr; // high-resolution waitable timer for frame pacing
+
+public:
+    ~MediaStream()
+    {
+        if (m_timer) CloseHandle(m_timer);
+    }
 };
 
 class MediaSource : public RuntimeClass<RuntimeClassFlags<ClassicCom>,
@@ -128,11 +137,13 @@ public:
 
 private:
     HRESULT CheckShutdown() const { return m_isShutdown ? MF_E_SHUTDOWN : S_OK; }
+    HRESULT BuildDescriptors(const vcam::CameraFormat& format);
 
     std::mutex m_lock;
     bool m_isShutdown = false;
     bool m_mfStarted = false;
     bool m_streamActive = false;
+    vcam::CameraFormat m_format = vcam::DefaultFormat;
     ComPtr<IMFMediaEventQueue> m_eventQueue;
     ComPtr<IMFAttributes> m_attributes;
     ComPtr<IMFPresentationDescriptor> m_presentationDescriptor;

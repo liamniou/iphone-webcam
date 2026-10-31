@@ -44,6 +44,16 @@ struct IPWC_STATUS
     wchar_t message[256];   // human-readable status / last error
     int32_t faces;            // faces currently detected by the iPhone; -1 if the phone doesn't send face data
     int32_t effectsAvailable; // 1 when auto-framing and retouching are available (GPU effects pipeline ready)
+    int32_t framing;          // IPWC_FRAMING
+    int32_t reserved2;
+};
+
+enum IPWC_FRAMING : int32_t
+{
+    IPWC_FRAMING_OFF = 0,     // full picture
+    IPWC_FRAMING_FOLLOW = 1,  // auto-framing follows the face(s)
+    IPWC_FRAMING_HOLD = 2,    // framed once on demand, crop is kept
+    IPWC_FRAMING_PENDING = 3, // waiting for a face to frame on demand
 };
 
 struct IPWC_DEVICE
@@ -73,9 +83,18 @@ IPWC_API void __stdcall IPWC_SetTransform(BOOL mirror, BOOL rotate180);
 IPWC_API void __stdcall IPWC_SetPreviewEnabled(BOOL enabled);
 // Auto-framing: smoothly crops/zooms to keep the detected face(s) framed.
 // tightness 0..1: 0 = wide (head and shoulders), 1 = tight (head fills the frame).
+// Also sets the tightness used by IPWC_FrameOnce. Disabling it returns to the full picture.
 IPWC_API void __stdcall IPWC_SetAutoFraming(BOOL enabled, float tightness);
+// On-demand framing: frames the current face(s) once and keeps that crop (stops auto-framing).
+// If no face is visible yet, waits up to 3 seconds for one.
+IPWC_API void __stdcall IPWC_FrameOnce();
+// Back to the full picture (stops auto-framing and on-demand framing).
+IPWC_API void __stdcall IPWC_ResetFraming();
 // Face retouching, each 0..1 (0 = off): reduce redness of the skin, smooth the skin.
 IPWC_API void __stdcall IPWC_SetRetouch(float redness, float smoothing);
+// Format the iPhone streams and the virtual camera offers. Supported: 3840x2160@30, 1920x1080@60/30,
+// 1280x720@60/30. Apps that already use the camera get the new format after reopening it.
+IPWC_API HRESULT __stdcall IPWC_SetOutputFormat(int32_t width, int32_t height, int32_t fps);
 
 // Copies up to capacity discovered phones; returns the total number found.
 IPWC_API int32_t __stdcall IPWC_GetDevices(IPWC_DEVICE* devices, int32_t capacity);

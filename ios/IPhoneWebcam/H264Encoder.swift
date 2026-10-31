@@ -8,10 +8,10 @@ import VideoToolbox
 final class H264Encoder {
     /// Called on VideoToolbox's callback thread with (annexBData, isKeyFrame).
     var onEncodedFrame: ((Data, Bool) -> Void)?
-    /// Called when a session is (re)created, with the encoded width and height.
-    var onResolutionChange: ((Int32, Int32) -> Void)?
+    /// Called when a session is (re)created, with the encoded width, height and frame rate.
+    var onResolutionChange: ((Int32, Int32, Int) -> Void)?
 
-    private let fps: Int
+    private var fps: Int
     private let bitsPerPixel: Double
     private var width: Int32 = 0
     private var height: Int32 = 0
@@ -27,6 +27,15 @@ final class H264Encoder {
 
     deinit {
         invalidate()
+    }
+
+    /// Changes the frame rate the encoder is tuned for (bitrate, keyframe interval); the session is recreated.
+    func setFrameRate(_ newFps: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard newFps != fps, newFps > 0 else { return }
+        fps = newFps
+        invalidateLocked()
     }
 
     func requestKeyFrame() {
@@ -103,11 +112,12 @@ final class H264Encoder {
         }
         let session = self.session
         let keyFrame = forceKeyFrame
+        let currentFps = fps
         forceKeyFrame = false
         lock.unlock()
         guard let session else { return }
         if resized {
-            onResolutionChange?(frameWidth, frameHeight)
+            onResolutionChange?(frameWidth, frameHeight, currentFps)
         }
 
         let frameProperties: CFDictionary? = keyFrame
