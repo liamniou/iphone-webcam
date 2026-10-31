@@ -33,6 +33,9 @@ internal struct EngineStatus
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string Address;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string Decoder;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string Message;
+    /// <summary>Faces currently detected by the iPhone; -1 if the phone doesn't send face data.</summary>
+    public int Faces;
+    public int EffectsAvailable;
 }
 
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 8)]
@@ -78,6 +81,12 @@ internal static class Engine
 
     [DllImport(Dll, EntryPoint = "IPWC_SetPreviewEnabled")]
     public static extern void SetPreviewEnabled([MarshalAs(UnmanagedType.Bool)] bool enabled);
+
+    [DllImport(Dll, EntryPoint = "IPWC_SetAutoFraming")]
+    public static extern void SetAutoFraming([MarshalAs(UnmanagedType.Bool)] bool enabled, float tightness);
+
+    [DllImport(Dll, EntryPoint = "IPWC_SetRetouch")]
+    public static extern void SetRetouch(float redness, float smoothing);
 
     [DllImport(Dll, EntryPoint = "IPWC_GetDevices")]
     private static extern int GetDevices([Out] EngineDevice[] devices, int capacity);

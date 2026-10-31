@@ -22,13 +22,36 @@ namespace
     {
         wprintf(L"Usage: IPhoneWebcamCli.exe [--ip <address>] [--port <port>] [--no-camera] [--software-decode]\n"
                 L"                           [--mirror] [--rotate180] [--preview-test]\n"
+                L"                           [--autoframe] [--framing <0-100>] [--redness <0-100>] [--smooth <0-100>]\n"
                 L"  --ip               Connect to this iPhone address instead of the first discovered phone\n"
                 L"  --port             TCP port of the iPhone app (default 5005)\n"
                 L"  --no-camera        Don't register the virtual camera (receiver/decoder test)\n"
                 L"  --software-decode  Decode on the CPU instead of the GPU\n"
                 L"  --mirror           Mirror the image horizontally\n"
                 L"  --rotate180        Rotate the image by 180 degrees\n"
-                L"  --preview-test     Enable the preview pipeline and report preview frames per second\n");
+                L"  --preview-test     Enable the preview pipeline and report preview frames per second\n"
+                L"  --autoframe        Keep the face framed (auto zoom and pan)\n"
+                L"  --framing          Auto-framing tightness: 0 = wide, 100 = tight (default 50)\n"
+                L"  --redness          Reduce facial redness, 0-100 %%\n"
+                L"  --smooth           Smooth skin, 0-100 %%\n"
+                L"  --snapshot <file>  Save the processed preview (960x540 BMP) after --seconds and exit\n"
+                L"  --seconds <n>      Delay before --snapshot (default 5)\n");
+    }
+
+    bool SaveBmp(const std::wstring& path, const std::vector<uint8_t>& bgra, int32_t w, int32_t h)
+    {
+        FILE* file = nullptr;
+        if (_wfopen_s(&file, path.c_str(), L"wb") != 0 || !file) return false;
+        BITMAPINFOHEADER info{ sizeof(BITMAPINFOHEADER), w, -h, 1, 32, BI_RGB };
+        BITMAPFILEHEADER header{};
+        header.bfType = 0x4D42;
+        header.bfOffBits = sizeof(header) + sizeof(info);
+        header.bfSize = header.bfOffBits + static_cast<DWORD>(bgra.size());
+        fwrite(&header, sizeof(header), 1, file);
+        fwrite(&info, sizeof(info), 1, file);
+        fwrite(bgra.data(), 1, bgra.size(), file);
+        fclose(file);
+        return true;
     }
 
     const wchar_t* StateName(int32_t state)
@@ -60,6 +83,10 @@ int wmain(int argc, wchar_t** argv)
     std::wstring ip;
     uint16_t port = 5005;
     bool noCamera = false, softwareDecode = false, mirror = false, rotate = false, previewTest = false;
+    bool autoFrame = false;
+    float framing = 0.5f, redness = 0, smooth = 0;
+    std::wstring snapshot;
+    int snapshotSeconds = 5;
     for (int i = 1; i < argc; ++i)
     {
         std::wstring arg = argv[i];
@@ -70,6 +97,12 @@ int wmain(int argc, wchar_t** argv)
         else if (arg == L"--mirror") mirror = true;
         else if (arg == L"--rotate180") rotate = true;
         else if (arg == L"--preview-test") previewTest = true;
+        else if (arg == L"--autoframe") autoFrame = true;
+        else if (arg == L"--framing" && i + 1 < argc) framing = _wtoi(argv[++i]) / 100.0f;
+        else if (arg == L"--redness" && i + 1 < argc) redness = _wtoi(argv[++i]) / 100.0f;
+        else if (arg == L"--smooth" && i + 1 < argc) smooth = _wtoi(argv[++i]) / 100.0f;
+        else if (arg == L"--snapshot" && i + 1 < argc) { snapshot = argv[++i]; previewTest = true; }
+        else if (arg == L"--seconds" && i + 1 < argc) snapshotSeconds = _wtoi(argv[++i]);
         else
         {
             PrintUsage();
@@ -87,6 +120,8 @@ int wmain(int argc, wchar_t** argv)
     IPWC_SetHardwareDecode(!softwareDecode);
     IPWC_SetTransform(mirror, rotate);
     IPWC_SetPreviewEnabled(previewTest);
+    IPWC_SetAutoFraming(autoFrame, framing);
+    IPWC_SetRetouch(redness, smooth);
 
     if (!noCamera)
     {
@@ -144,6 +179,8 @@ int wmain(int argc, wchar_t** argv)
                     StateName(status.state), status.fps, status.width, status.height,
                     status.bitrateKbps / 1000.0, status.hardwareDecode ? L"GPU" : L"CPU", CameraName(status.camera));
             if (previewTest) wprintf(L"  preview: %d fps", previewFrames);
+            if (status.faces >= 0) wprintf(L"  faces: %d", status.faces);
+            if (!status.effectsAvailable) wprintf(L"  (effects unavailable)");
             wprintf(L"\n");
         }
         else if (lastMessage != status.message)
@@ -152,6 +189,13 @@ int wmain(int argc, wchar_t** argv)
         }
         lastMessage = status.message;
         previewFrames = 0;
+
+        if (!snapshot.empty() && status.state == IPWC_STATE_STREAMING && --snapshotSeconds <= 0 && lastPreview != 0)
+        {
+            bool saved = SaveBmp(snapshot, preview, IPWC_PREVIEW_WIDTH, IPWC_PREVIEW_HEIGHT);
+            wprintf(L"%s %s\n", saved ? L"Saved snapshot" : L"Couldn't save snapshot", snapshot.c_str());
+            break;
+        }
     }
 
     wprintf(L"Shutting down...\n");

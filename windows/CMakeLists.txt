@@ -25,13 +25,19 @@ add_library(IPhoneWebcamEngine SHARED
     engine/IPhoneWebcamEngine.h
     engine/DeviceBrowser.cpp
     engine/DeviceBrowser.h
+    engine/Effects.h
+    engine/FaceTracker.cpp
+    engine/GpuDevice.cpp
+    engine/GpuDevice.h
     engine/H264Decoder.cpp
     engine/H264Decoder.h
     engine/FrameWriter.cpp
     engine/FrameWriter.h
+    engine/VideoEffects.cpp
+    engine/VideoEffects.h
     common/SharedFrame.h)
 target_compile_definitions(IPhoneWebcamEngine PRIVATE IPWC_EXPORTS)
-target_link_libraries(IPhoneWebcamEngine PRIVATE mfplat mfuuid mfsensorgroup wmcodecdspuuid d3d11 dxgi ws2_32 dnsapi ole32 advapi32)
+target_link_libraries(IPhoneWebcamEngine PRIVATE mfplat mfuuid mfsensorgroup wmcodecdspuuid d3d11 dxgi d3dcompiler ws2_32 dnsapi ole32 advapi32)
 
 # Command-line front end (the WPF desktop app in desktop/ is the main UI).
 add_executable(IPhoneWebcamCli cli/main.cpp)

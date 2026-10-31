@@ -16,17 +16,29 @@
 
 #include "IPhoneWebcamEngine.h"
 #include "DeviceBrowser.h"
+#include "Effects.h"
 #include "FrameWriter.h"
+#include "GpuDevice.h"
 #include "H264Decoder.h"
+#include "VideoEffects.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstring>
+#include <memory>
 
 using Microsoft::WRL::ComPtr;
 
 namespace
 {
     constexpr uint8_t MessageVideo = 1;
+    constexpr uint8_t MessageFaces = 2;
     constexpr uint8_t RequestKeyFrame = 'K';
     constexpr uint32_t MaxMessageSize = 16 * 1024 * 1024;
     constexpr auto ReconnectDelay = std::chrono::seconds(2);
+    constexpr ULONGLONG FaceDataMaxAgeMs = 1000;
+    constexpr uint8_t MaxFacesPerMessage = 8;
 
     template <size_t N>
     void CopyString(wchar_t (&dst)[N], const std::wstring& src)
@@ -104,8 +116,23 @@ public:
     void Disconnect();
     void SetAutoReconnect(bool enabled) { m_autoReconnect = enabled; }
     void SetHardwareDecode(bool enabled) { m_hardwareDecode = enabled; }
-    void SetTransform(bool mirror, bool rotate180) { m_writer.SetTransform(mirror, rotate180); }
+    void SetTransform(bool mirror, bool rotate180)
+    {
+        m_mirror = mirror;
+        m_rotate180 = rotate180;
+        m_writer.SetTransform(mirror, rotate180); // used by the CPU fallback path
+    }
     void SetPreviewEnabled(bool enabled) { m_writer.SetPreviewEnabled(enabled); }
+    void SetAutoFraming(bool enabled, float tightness)
+    {
+        m_autoFraming = enabled;
+        m_tightness = std::clamp(tightness, 0.0f, 1.0f);
+    }
+    void SetRetouch(float redness, float smoothing)
+    {
+        m_redness = std::clamp(redness, 0.0f, 1.0f);
+        m_smoothing = std::clamp(smoothing, 0.0f, 1.0f);
+    }
 
     int32_t GetDevices(IPWC_DEVICE* devices, int32_t capacity);
     void RefreshDevices() { m_browser.Refresh(); }
@@ -132,16 +159,26 @@ private:
 
     std::atomic<bool> m_autoReconnect{ true };
     std::atomic<bool> m_hardwareDecode{ true };
+    std::atomic<bool> m_mirror{ false };
+    std::atomic<bool> m_rotate180{ false };
+    std::atomic<bool> m_autoFraming{ false };
+    std::atomic<float> m_tightness{ 0.5f };
+    std::atomic<float> m_redness{ 0.0f };
+    std::atomic<float> m_smoothing{ 0.0f };
 
     IPWC_STATE m_state = IPWC_STATE_IDLE;
     std::wstring m_message = L"Not connected";
     std::wstring m_decoder;
     bool m_hardwareActive = false;
     int32_t m_width = 0, m_height = 0, m_fps = 0, m_kbps = 0;
+    int32_t m_faces = -1;
 
     ComPtr<IMFVirtualCamera> m_camera;
     DeviceBrowser m_browser;
     FrameWriter m_writer;
+    std::unique_ptr<GpuDevice> m_gpu; // null when no usable GPU
+    VideoEffects m_effects;
+    FaceTracker m_tracker;
 };
 
 HRESULT Engine::Initialize()
@@ -153,6 +190,18 @@ HRESULT Engine::Initialize()
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return HRESULT_FROM_WIN32(WSAGetLastError());
     HRESULT hr = MFStartup(MF_VERSION);
     if (FAILED(hr)) return hr;
+
+    // GPU decoding and effects are optional: without them the engine decodes on the CPU and
+    // skips auto-framing/retouching.
+    auto gpu = std::make_unique<GpuDevice>();
+    if (SUCCEEDED(gpu->Create()))
+    {
+        m_gpu = std::move(gpu);
+        if (FAILED(m_effects.Initialize(m_gpu.get(), vcam::FrameWidth, vcam::FrameHeight)))
+        {
+            OutputDebugStringW(L"IPhoneWebcamEngine: effects pipeline unavailable\n");
+        }
+    }
 
     m_browser.Start();
     m_stopping = false;
@@ -179,6 +228,7 @@ HRESULT Engine::StartVirtualCamera()
         if (SUCCEEDED(hr)) hr = camera->Start(nullptr);
         if (SUCCEEDED(hr)) m_camera = camera;
     });
+    m_writer.SetPublishEnabled(SUCCEEDED(hr));
     return hr;
 }
 
@@ -280,6 +330,8 @@ void Engine::GetStatus(IPWC_STATUS* status)
         CopyString(result.decoder, m_decoder);
         CopyString(result.message, m_message);
         result.camera = !m_camera ? IPWC_CAMERA_UNAVAILABLE : IPWC_CAMERA_READY;
+        result.faces = m_faces;
+        result.effectsAvailable = m_effects.IsReady() ? 1 : 0;
     }
     if (result.camera == IPWC_CAMERA_READY && m_writer.IsCameraInUse()) result.camera = IPWC_CAMERA_IN_USE;
     *status = result;
@@ -288,6 +340,7 @@ void Engine::GetStatus(IPWC_STATUS* status)
 void Engine::ResetStatsLocked()
 {
     m_width = m_height = m_fps = m_kbps = 0;
+    m_faces = -1;
 }
 
 void Engine::WorkerLoop()
@@ -373,12 +426,12 @@ void Engine::WorkerLoop()
 std::wstring Engine::Stream(SOCKET s)
 {
     H264Decoder decoder;
-    HRESULT hr = decoder.Initialize(m_hardwareDecode);
+    HRESULT hr = decoder.Initialize(m_gpu.get(), m_hardwareDecode);
     if (FAILED(hr)) return L"Couldn't create the H.264 decoder.";
     {
         std::lock_guard lock(m_lock);
         m_hardwareActive = decoder.IsHardware();
-        m_decoder = decoder.IsHardware() ? decoder.AdapterName() : L"CPU (software)";
+        m_decoder = decoder.IsHardware() ? m_gpu->AdapterName() : L"CPU (software)";
     }
 
     std::vector<uint8_t> message;
@@ -389,11 +442,65 @@ std::wstring Engine::Stream(SOCKET s)
     ULONGLONG lastKeyFrameRequest = 0;
     LONGLONG timestamp = 0;
 
+    // Face detections sent by the phone (normalized frame coordinates), plus their estimated
+    // velocity so masks and framing can be extrapolated between detections (~6 per second).
+    std::vector<NormRect> faces;
+    std::vector<NormRect> previousFaces;
+    std::vector<std::pair<float, float>> faceVelocity;
+    bool phoneSendsFaces = false;
+    ULONGLONG lastFacesTick = 0;
+    std::vector<NormRect> predicted;
+    m_tracker.Reset();
+    auto lastFrameTime = std::chrono::steady_clock::now();
+
+    auto writeFallback = [&](const DecodedFrame& frame) {
+        if (frame.texture) decoder.ReadBack(frame, [&](const DecodedFrame& cpu) { m_writer.Write(cpu); });
+        else m_writer.Write(frame);
+    };
+
     auto onFrame = [&](const DecodedFrame& frame) {
         ++frames;
         width = frame.width;
         height = frame.height;
-        m_writer.Write(frame);
+
+        auto now = std::chrono::steady_clock::now();
+        double dt = std::chrono::duration<double>(now - lastFrameTime).count();
+        lastFrameTime = now;
+
+        if (!m_effects.IsReady())
+        {
+            writeFallback(frame);
+            return;
+        }
+
+        ULONGLONG age = GetTickCount64() - lastFacesTick;
+        bool fresh = phoneSendsFaces && age < FaceDataMaxAgeMs;
+        predicted.clear();
+        if (fresh)
+        {
+            float seconds = std::min(age, 300ULL) / 1000.0f;
+            for (size_t i = 0; i < faces.size(); ++i)
+            {
+                NormRect f = faces[i];
+                f.x += faceVelocity[i].first * seconds;
+                f.y += faceVelocity[i].second * seconds;
+                predicted.push_back(f);
+            }
+        }
+
+        FrameParams params;
+        params.crop = m_tracker.Update(predicted, fresh, m_autoFraming, m_tightness, dt);
+        params.effects.mirror = m_mirror;
+        params.effects.rotate180 = m_rotate180;
+        params.effects.redness = m_redness;
+        params.effects.smoothing = m_smoothing;
+        params.faces = predicted;
+        params.hasFaceInfo = phoneSendsFaces;
+
+        HRESULT result = m_effects.Process(frame, params, [&](const uint8_t* y, UINT yPitch, const uint8_t* uv, UINT uvPitch) {
+            m_writer.WriteOutput(y, yPitch, uv, uvPitch);
+        });
+        if (FAILED(result)) writeFallback(frame);
     };
 
     for (;;)
@@ -416,6 +523,54 @@ std::wstring Engine::Stream(SOCKET s)
                 send(s, reinterpret_cast<const char*>(&RequestKeyFrame), 1, 0);
             }
         }
+        else if (header[4] == MessageFaces && !message.empty())
+        {
+            // u8 count, then count x (x, y, w, h) as little-endian float32, normalized, top-left origin.
+            size_t count = std::min<size_t>(message[0], MaxFacesPerMessage);
+            if (message.size() >= 1 + count * 16)
+            {
+                faces.clear();
+                for (size_t i = 0; i < count; ++i)
+                {
+                    float v[4];
+                    memcpy(v, message.data() + 1 + i * 16, sizeof(v));
+                    // Vision boxes can extend past the frame edge: clamp the edges, not origin and size,
+                    // so faces at the border don't get shifted.
+                    float x0 = std::clamp(v[0], 0.0f, 1.0f), y0 = std::clamp(v[1], 0.0f, 1.0f);
+                    float x1 = std::clamp(v[0] + v[2], 0.0f, 1.0f), y1 = std::clamp(v[1] + v[3], 0.0f, 1.0f);
+                    if (!std::isfinite(v[0] + v[1] + v[2] + v[3])) continue;
+                    NormRect r{ x0, y0, x1 - x0, y1 - y0 };
+                    if (r.w > 0.005f && r.h > 0.005f) faces.push_back(r);
+                }
+                // Largest faces first, so the effects pipeline keeps the most important ones.
+                std::sort(faces.begin(), faces.end(), [](const NormRect& a, const NormRect& b) { return a.w * a.h > b.w * b.h; });
+
+                // Velocity per face from the nearest face in the previous detection.
+                ULONGLONG tick = GetTickCount64();
+                float interval = (tick - lastFacesTick) / 1000.0f;
+                faceVelocity.assign(faces.size(), { 0.0f, 0.0f });
+                if (phoneSendsFaces && interval > 0.02f && interval < 0.6f)
+                {
+                    for (size_t i = 0; i < faces.size(); ++i)
+                    {
+                        float best = faces[i].w; // only match faces that moved less than their width
+                        for (const NormRect& p : previousFaces)
+                        {
+                            float dx = faces[i].cx() - p.cx(), dy = faces[i].cy() - p.cy();
+                            float distance = std::sqrt(dx * dx + dy * dy);
+                            if (distance < best)
+                            {
+                                best = distance;
+                                faceVelocity[i] = { (faces[i].x - p.x) / interval, (faces[i].y - p.y) / interval };
+                            }
+                        }
+                    }
+                }
+                previousFaces = faces;
+                phoneSendsFaces = true;
+                lastFacesTick = tick;
+            }
+        }
 
         ULONGLONG now = GetTickCount64();
         if (now - lastReport >= 1000)
@@ -426,6 +581,7 @@ std::wstring Engine::Stream(SOCKET s)
             m_kbps = static_cast<int32_t>(bytes * 8 / 1000 / seconds);
             m_width = static_cast<int32_t>(width);
             m_height = static_cast<int32_t>(height);
+            m_faces = !phoneSendsFaces ? -1 : (now - lastFacesTick < FaceDataMaxAgeMs ? static_cast<int32_t>(faces.size()) : 0);
             m_message = L"Streaming";
             frames = 0;
             bytes = 0;
@@ -462,6 +618,8 @@ IPWC_API void __stdcall IPWC_SetAutoReconnect(BOOL enabled) { TheEngine().SetAut
 IPWC_API void __stdcall IPWC_SetHardwareDecode(BOOL enabled) { TheEngine().SetHardwareDecode(enabled != FALSE); }
 IPWC_API void __stdcall IPWC_SetTransform(BOOL mirror, BOOL rotate180) { TheEngine().SetTransform(mirror != FALSE, rotate180 != FALSE); }
 IPWC_API void __stdcall IPWC_SetPreviewEnabled(BOOL enabled) { TheEngine().SetPreviewEnabled(enabled != FALSE); }
+IPWC_API void __stdcall IPWC_SetAutoFraming(BOOL enabled, float tightness) { TheEngine().SetAutoFraming(enabled != FALSE, tightness); }
+IPWC_API void __stdcall IPWC_SetRetouch(float redness, float smoothing) { TheEngine().SetRetouch(redness, smoothing); }
 
 IPWC_API int32_t __stdcall IPWC_GetDevices(IPWC_DEVICE* devices, int32_t capacity)
 {

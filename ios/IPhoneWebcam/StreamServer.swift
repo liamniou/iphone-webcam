@@ -5,7 +5,10 @@ import UIKit
 /// TCP server advertised over Bonjour. Serves one receiver at a time.
 ///
 /// Wire format (iPhone -> PC), repeated:
-///   UInt32 big-endian length (of type + payload) | UInt8 type (1 = H.264 Annex B access unit) | payload
+///   UInt32 big-endian length (of type + payload) | UInt8 type | payload
+///   type 1: H.264 Annex B access unit
+///   type 2: face detections: UInt8 count, then count x (x, y, w, h) little-endian Float32,
+///           normalized to the video frame, origin top-left
 /// PC -> iPhone: a single byte 'K' requests a keyframe.
 final class StreamServer {
     static let port: NWEndpoint.Port = 5005
@@ -124,20 +127,39 @@ final class StreamServer {
             }
             self.waitingForKeyFrame = false
 
-            let length = UInt32(frame.count + 1)
-            var message = Data(capacity: frame.count + 5)
-            message.append(UInt8(truncatingIfNeeded: length >> 24))
-            message.append(UInt8(truncatingIfNeeded: length >> 16))
-            message.append(UInt8(truncatingIfNeeded: length >> 8))
-            message.append(UInt8(truncatingIfNeeded: length))
-            message.append(1)
-            message.append(frame)
-
             self.inFlight += 1
-            connection.send(content: message, completion: .contentProcessed { [weak self] _ in
+            connection.send(content: Self.message(type: 1, payload: frame), completion: .contentProcessed { [weak self] _ in
                 self?.inFlight -= 1
             })
         }
+    }
+
+    /// Thread-safe. Sends face detections; small, so they are never dropped for bandwidth.
+    func send(faces: [CGRect]) {
+        var payload = Data(capacity: 1 + faces.count * 16)
+        let count = min(faces.count, 8)
+        payload.append(UInt8(count))
+        for face in faces.prefix(count) {
+            for value in [face.minX, face.minY, face.width, face.height] {
+                withUnsafeBytes(of: Float32(value).bitPattern.littleEndian) { payload.append(contentsOf: $0) }
+            }
+        }
+        queue.async {
+            guard let connection = self.connection, case .ready = connection.state else { return }
+            connection.send(content: Self.message(type: 2, payload: payload), completion: .idempotent)
+        }
+    }
+
+    private static func message(type: UInt8, payload: Data) -> Data {
+        let length = UInt32(payload.count + 1)
+        var message = Data(capacity: payload.count + 5)
+        message.append(UInt8(truncatingIfNeeded: length >> 24))
+        message.append(UInt8(truncatingIfNeeded: length >> 16))
+        message.append(UInt8(truncatingIfNeeded: length >> 8))
+        message.append(UInt8(truncatingIfNeeded: length))
+        message.append(type)
+        message.append(payload)
+        return message
     }
 
     private static func describe(_ endpoint: NWEndpoint) -> String {

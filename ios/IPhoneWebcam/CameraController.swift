@@ -18,6 +18,7 @@ final class CameraController: NSObject, ObservableObject {
     private let videoQueue = DispatchQueue(label: "camera.video")
     private let videoOutput = AVCaptureVideoDataOutput()
     private let encoder = H264Encoder(fps: CameraController.fps)
+    private let faceDetector = FaceDetector()
     private let server = StreamServer()
     private let clientLock = NSLock()
     private var clientConnected = false
@@ -31,6 +32,10 @@ final class CameraController: NSObject, ObservableObject {
         }
         encoder.onResolutionChange = { [weak self] width, height in
             DispatchQueue.main.async { self?.resolution = "\(width)×\(height) @ \(CameraController.fps) fps" }
+        }
+        // Face positions let the PC app auto-frame and retouch; detection runs only while streaming.
+        faceDetector.onFaces = { [weak self] faces in
+            self?.server.send(faces: faces)
         }
         server.onKeyFrameRequested = { [weak self] in
             self?.encoder.requestKeyFrame()
@@ -188,6 +193,9 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
         clientLock.unlock()
         if shouldEncode {
             encoder.encode(sampleBuffer)
+            if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+                faceDetector.process(pixelBuffer)
+            }
         }
     }
 }

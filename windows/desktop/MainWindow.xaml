@@ -45,8 +45,8 @@
                 </Grid>
             </Border>
 
-            <TextBlock Grid.Row="2" Margin="2,10,0,0" Style="{StaticResource SubtleText}"
-                       Text="Select &quot;iPhone Webcam&quot; as the camera in Zoom, Teams, OBS or any other app. Closing this window keeps the camera running in the system tray." />
+            <TextBlock x:Name="FooterText" Grid.Row="2" Margin="2,10,0,0" Style="{StaticResource SubtleText}"
+                       Text="Select &quot;iPhone Webcam&quot; as the camera in Zoom, Teams, OBS or any other app." />
         </Grid>
 
         <!-- Side panel -->
@@ -139,6 +139,36 @@
                     <CheckBox x:Name="MirrorBox" Content="Mirror horizontally" Checked="OnTransformChanged" Unchecked="OnTransformChanged" />
                     <CheckBox x:Name="RotateBox" Content="Rotate 180°" Checked="OnTransformChanged" Unchecked="OnTransformChanged" />
 
+                    <!-- Auto-framing -->
+                    <TextBlock Text="AUTO-FRAMING" Style="{StaticResource SectionHeader}" />
+                    <CheckBox x:Name="AutoFrameBox" Content="Keep my face in frame" Checked="OnAutoFramingChanged" Unchecked="OnAutoFramingChanged"
+                              ToolTip="Zooms in and smoothly follows your face (all faces, if there are several)" />
+                    <Grid Margin="0,6,0,0">
+                        <TextBlock Text="Framing" Foreground="{StaticResource SubtleTextBrush}" />
+                        <TextBlock x:Name="FramingValue" HorizontalAlignment="Right" Foreground="{StaticResource SubtleTextBrush}" />
+                    </Grid>
+                    <Slider x:Name="FramingSlider" Minimum="0" Maximum="100" SmallChange="5" LargeChange="10"
+                            ValueChanged="OnFramingChanged" ToolTip="Wide: head and shoulders. Tight: head fills the picture." />
+                    <TextBlock x:Name="FaceStatusText" Style="{StaticResource SubtleText}" FontSize="11" />
+
+                    <!-- Retouch -->
+                    <TextBlock Text="RETOUCH" Style="{StaticResource SectionHeader}" />
+                    <Grid>
+                        <TextBlock Text="Reduce redness" />
+                        <TextBlock x:Name="RednessValue" HorizontalAlignment="Right" Foreground="{StaticResource SubtleTextBrush}" />
+                    </Grid>
+                    <Slider x:Name="RednessSlider" Minimum="0" Maximum="100" SmallChange="5" LargeChange="10"
+                            ValueChanged="OnRetouchChanged" ToolTip="Evens out a red complexion (only skin tones on your face are changed)" />
+                    <Grid Margin="0,4,0,0">
+                        <TextBlock Text="Smooth skin" />
+                        <TextBlock x:Name="SmoothingValue" HorizontalAlignment="Right" Foreground="{StaticResource SubtleTextBrush}" />
+                    </Grid>
+                    <Slider x:Name="SmoothingSlider" Minimum="0" Maximum="100" SmallChange="5" LargeChange="10"
+                            ValueChanged="OnRetouchChanged" ToolTip="Softens skin texture while keeping eyes, hair and edges sharp" />
+                    <TextBlock x:Name="EffectsUnavailableText" Foreground="{StaticResource BadBrush}" FontSize="11" TextWrapping="Wrap"
+                               Visibility="Collapsed"
+                               Text="Auto-framing and retouch need a DirectX 11 graphics card; they are disabled on this PC." />
+
                     <!-- Options -->
                     <TextBlock Text="OPTIONS" Style="{StaticResource SectionHeader}" />
                     <CheckBox x:Name="AutoReconnectBox" Content="Reconnect automatically" Checked="OnAutoReconnectChanged" Unchecked="OnAutoReconnectChanged"
@@ -146,6 +176,8 @@
                     <CheckBox x:Name="HardwareDecodeBox" Content="Decode on the GPU" Checked="OnHardwareDecodeChanged" Unchecked="OnHardwareDecodeChanged"
                               ToolTip="Recommended for 4K. Takes effect on the next connection." />
                     <CheckBox x:Name="AutostartBox" Content="Start with Windows (in the tray)" Checked="OnAutostartChanged" Unchecked="OnAutostartChanged" />
+                    <CheckBox x:Name="CloseToTrayBox" Content="Close to tray" Checked="OnCloseToTrayChanged" Unchecked="OnCloseToTrayChanged"
+                              ToolTip="On: closing the window keeps the camera running in the system tray. Off: closing the window exits the app." />
                 </StackPanel>
             </ScrollViewer>
         </Border>

@@ -1,7 +1,6 @@
 #include "H264Decoder.h"
+#include "GpuDevice.h"
 
-#include <d3d11_4.h>
-#include <dxgi1_6.h>
 #include <mferror.h>
 #include <wmcodecdsp.h>
 #include <algorithm>
@@ -9,9 +8,10 @@
 
 using Microsoft::WRL::ComPtr;
 
-HRESULT H264Decoder::Initialize(bool allowHardware)
+HRESULT H264Decoder::Initialize(GpuDevice* gpu, bool allowHardware)
 {
     m_decoder.Reset();
+    m_gpu = gpu;
     HRESULT hr = CoCreateInstance(CLSID_CMSH264DecoderMFT, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&m_decoder));
     if (FAILED(hr)) return hr;
 
@@ -22,7 +22,7 @@ HRESULT H264Decoder::Initialize(bool allowHardware)
     }
 
     // The D3D manager must be set before the media types.
-    m_hardware = allowHardware && SUCCEEDED(EnableHardware());
+    m_hardware = allowHardware && m_gpu && SUCCEEDED(EnableHardware());
 
     ComPtr<IMFMediaType> input;
     hr = MFCreateMediaType(&input);
@@ -51,56 +51,12 @@ HRESULT H264Decoder::EnableHardware()
         return E_NOTIMPL;
     }
 
-    // Pick the high-performance GPU explicitly; virtual display adapters may be enumerated first.
-    ComPtr<IDXGIFactory6> factory;
-    HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
-    if (FAILED(hr)) return hr;
-
-    const D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
-    for (UINT i = 0;; ++i)
+    HRESULT hr = m_decoder->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, reinterpret_cast<ULONG_PTR>(m_gpu->Manager()));
+    if (FAILED(hr))
     {
-        ComPtr<IDXGIAdapter1> adapter;
-        if (factory->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter)) == DXGI_ERROR_NOT_FOUND)
-        {
-            return E_FAIL;
-        }
-        DXGI_ADAPTER_DESC1 desc{};
-        adapter->GetDesc1(&desc);
-        if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
-
-        ComPtr<ID3D11Device> device;
-        ComPtr<ID3D11DeviceContext> context;
-        hr = D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
-                               D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                               levels, ARRAYSIZE(levels), D3D11_SDK_VERSION, &device, nullptr, &context);
-        if (FAILED(hr)) continue;
-
-        ComPtr<ID3D11VideoDevice> videoDevice;
-        if (FAILED(device.As(&videoDevice))) continue;
-
-        ComPtr<ID3D11Multithread> multithread;
-        if (SUCCEEDED(device.As(&multithread))) multithread->SetMultithreadProtected(TRUE);
-
-        UINT resetToken = 0;
-        ComPtr<IMFDXGIDeviceManager> manager;
-        hr = MFCreateDXGIDeviceManager(&resetToken, &manager);
-        if (FAILED(hr)) return hr;
-        hr = manager->ResetDevice(device.Get(), resetToken);
-        if (FAILED(hr)) continue;
-
-        hr = m_decoder->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, reinterpret_cast<ULONG_PTR>(manager.Get()));
-        if (FAILED(hr))
-        {
-            m_decoder->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, 0);
-            return hr;
-        }
-
-        m_device = device;
-        m_context = context;
-        m_deviceManager = manager;
-        m_adapterName = desc.Description;
-        return S_OK;
+        m_decoder->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, 0);
     }
+    return hr;
 }
 
 HRESULT H264Decoder::ConfigureOutput()
@@ -174,20 +130,14 @@ HRESULT H264Decoder::Decode(const uint8_t* data, size_t length, LONGLONG timesta
     return DrainOutput(onFrame);
 }
 
-HRESULT H264Decoder::DeliverTexture(IMFMediaBuffer* buffer, const FrameCallback& onFrame)
+HRESULT H264Decoder::ReadBack(const DecodedFrame& source, const FrameCallback& onFrame)
 {
-    ComPtr<IMFDXGIBuffer> dxgiBuffer;
-    HRESULT hr = buffer->QueryInterface(IID_PPV_ARGS(&dxgiBuffer));
-    if (FAILED(hr)) return hr;
-
-    ComPtr<ID3D11Texture2D> texture;
-    hr = dxgiBuffer->GetResource(IID_PPV_ARGS(&texture));
-    if (FAILED(hr)) return hr;
-    UINT subresource = 0;
-    dxgiBuffer->GetSubresourceIndex(&subresource);
+    if (!source.texture) return E_INVALIDARG;
+    ID3D11Device* device = m_gpu->Device();
+    ID3D11DeviceContext* context = m_gpu->Context();
 
     D3D11_TEXTURE2D_DESC desc{};
-    texture->GetDesc(&desc);
+    source.texture->GetDesc(&desc);
 
     D3D11_TEXTURE2D_DESC stagingDesc{};
     if (m_staging) m_staging->GetDesc(&stagingDesc);
@@ -203,26 +153,26 @@ HRESULT H264Decoder::DeliverTexture(IMFMediaBuffer* buffer, const FrameCallback&
         stagingDesc.Usage = D3D11_USAGE_STAGING;
         stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         m_staging.Reset();
-        hr = m_device->CreateTexture2D(&stagingDesc, nullptr, &m_staging);
+        HRESULT hr = device->CreateTexture2D(&stagingDesc, nullptr, &m_staging);
         if (FAILED(hr)) return hr;
     }
 
     // Planar NV12 is a single subresource per array slice, so this copies both planes.
-    m_context->CopySubresourceRegion(m_staging.Get(), 0, 0, 0, 0, texture.Get(), subresource, nullptr);
+    context->CopySubresourceRegion(m_staging.Get(), 0, 0, 0, 0, source.texture, source.subresource, nullptr);
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    hr = m_context->Map(m_staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    HRESULT hr = context->Map(m_staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
     if (FAILED(hr)) return hr;
 
     DecodedFrame frame{};
     frame.y = static_cast<const uint8_t*>(mapped.pData);
     frame.uv = frame.y + static_cast<size_t>(mapped.RowPitch) * desc.Height;
     frame.pitch = static_cast<LONG>(mapped.RowPitch);
-    frame.width = std::min<UINT32>(m_visibleWidth, desc.Width);
-    frame.height = std::min<UINT32>(m_visibleHeight, desc.Height);
+    frame.width = std::min<UINT32>(source.width, desc.Width);
+    frame.height = std::min<UINT32>(source.height, desc.Height);
     onFrame(frame);
 
-    m_context->Unmap(m_staging.Get(), 0);
+    context->Unmap(m_staging.Get(), 0);
     return S_OK;
 }
 
@@ -265,9 +215,20 @@ HRESULT H264Decoder::DrainOutput(const FrameCallback& onFrame)
         hr = result->GetBufferByIndex(0, &buffer);
         if (FAILED(hr)) return hr;
 
-        if (m_hardware && SUCCEEDED(DeliverTexture(buffer.Get(), onFrame)))
+        if (m_hardware)
         {
-            continue;
+            ComPtr<IMFDXGIBuffer> dxgiBuffer;
+            ComPtr<ID3D11Texture2D> texture;
+            if (SUCCEEDED(buffer.As(&dxgiBuffer)) && SUCCEEDED(dxgiBuffer->GetResource(IID_PPV_ARGS(&texture))))
+            {
+                DecodedFrame frame{};
+                frame.texture = texture.Get();
+                dxgiBuffer->GetSubresourceIndex(&frame.subresource);
+                frame.width = m_visibleWidth;
+                frame.height = m_visibleHeight;
+                onFrame(frame);
+                continue;
+            }
         }
 
         buffer.Reset();

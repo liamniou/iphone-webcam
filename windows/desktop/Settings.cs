@@ -16,10 +16,23 @@ internal sealed class Settings
     public bool HardwareDecode { get; set; } = true;
     public bool Mirror { get; set; }
     public bool Rotate180 { get; set; }
+    public bool AutoFraming { get; set; }
+    /// <summary>0 = wide, 100 = tight.</summary>
+    public int Framing { get; set; } = 50;
+    /// <summary>0..100 %.</summary>
+    public int RednessReduction { get; set; }
+    /// <summary>0..100 %.</summary>
+    public int SkinSmoothing { get; set; }
+    /// <summary>Closing the window hides it to the tray (true) or exits the app (false).</summary>
+    public bool CloseToTray { get; set; } = true;
     public bool TrayHintShown { get; set; }
 
-    private static readonly string FilePath = Path.Combine(
+    private static string FilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "IPhoneWebcam", "settings.json");
+
+    /// <summary>Use a separate settings file (development instances, see App --dev).</summary>
+    public static void UseProfile(string folderName) =>
+        FilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), folderName, "settings.json");
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 

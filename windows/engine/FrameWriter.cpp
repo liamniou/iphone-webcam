@@ -63,33 +63,55 @@ bool FrameWriter::IsCameraInUse()
     return GetTickCount64() - static_cast<ULONGLONG>(header->lastReadTick) < CameraIdleMs;
 }
 
-void FrameWriter::Write(const DecodedFrame& frame)
+uint8_t* FrameWriter::BeginFrame(LONG& slot, bool& shared)
 {
-    if (frame.width < 2 || frame.height < 2) return;
+    shared = m_publish && TryOpen();
+    slot = 0;
+    if (!shared) return m_private.data();
+    auto header = reinterpret_cast<vcam::SharedHeader*>(m_view);
+    slot = (header->latestSlot + 1) % static_cast<LONG>(vcam::SlotCount);
+    return m_view + vcam::SlotOffset(slot);
+}
 
-    const bool shared = TryOpen();
-    vcam::SharedHeader* header = shared ? reinterpret_cast<vcam::SharedHeader*>(m_view) : nullptr;
-    LONG slot = 0;
-    uint8_t* dstY = m_private.data();
+void FrameWriter::EndFrame(LONG slot, bool shared, const uint8_t* y, const uint8_t* uv)
+{
     if (shared)
     {
-        slot = (header->latestSlot + 1) % static_cast<LONG>(vcam::SlotCount);
-        dstY = m_view + vcam::SlotOffset(slot);
-    }
-    uint8_t* dstUV = dstY + static_cast<size_t>(W) * H;
-
-    Scale(frame, dstY, dstUV);
-    ApplyTransform(dstY, dstUV);
-
-    if (shared)
-    {
+        auto header = reinterpret_cast<vcam::SharedHeader*>(m_view);
         MemoryBarrier();
         InterlockedExchange(&header->latestSlot, slot);
         InterlockedIncrement64(&header->frameCounter);
         InterlockedExchange64(&header->lastWriteTick, static_cast<LONG64>(GetTickCount64()));
     }
+    if (m_previewEnabled) UpdatePreview(y, uv);
+}
 
-    if (m_previewEnabled) UpdatePreview(dstY, dstUV);
+void FrameWriter::Write(const DecodedFrame& frame)
+{
+    if (frame.width < 2 || frame.height < 2 || !frame.y) return;
+
+    LONG slot;
+    bool shared;
+    uint8_t* dstY = BeginFrame(slot, shared);
+    uint8_t* dstUV = dstY + static_cast<size_t>(W) * H;
+
+    Scale(frame, dstY, dstUV);
+    ApplyTransform(dstY, dstUV);
+    EndFrame(slot, shared, dstY, dstUV);
+}
+
+void FrameWriter::WriteOutput(const uint8_t* y, UINT yPitch, const uint8_t* uv, UINT uvPitch)
+{
+    LONG slot;
+    bool shared;
+    uint8_t* dstY = BeginFrame(slot, shared);
+    uint8_t* dstUV = dstY + static_cast<size_t>(W) * H;
+
+    for (uint32_t row = 0; row < H; ++row)
+        memcpy(dstY + static_cast<size_t>(row) * W, y + static_cast<size_t>(row) * yPitch, W);
+    for (uint32_t row = 0; row < H / 2; ++row)
+        memcpy(dstUV + static_cast<size_t>(row) * W, uv + static_cast<size_t>(row) * uvPitch, W);
+    EndFrame(slot, shared, dstY, dstUV);
 }
 
 void FrameWriter::Scale(const DecodedFrame& frame, uint8_t* dstY, uint8_t* dstUV)

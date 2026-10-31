@@ -42,6 +42,8 @@ struct IPWC_STATUS
     wchar_t address[64];
     wchar_t decoder[128];   // GPU adapter name or "CPU (software)"
     wchar_t message[256];   // human-readable status / last error
+    int32_t faces;            // faces currently detected by the iPhone; -1 if the phone doesn't send face data
+    int32_t effectsAvailable; // 1 when auto-framing and retouching are available (GPU effects pipeline ready)
 };
 
 struct IPWC_DEVICE
@@ -69,6 +71,11 @@ IPWC_API void __stdcall IPWC_SetAutoReconnect(BOOL enabled);
 IPWC_API void __stdcall IPWC_SetHardwareDecode(BOOL enabled); // applies on the next connection
 IPWC_API void __stdcall IPWC_SetTransform(BOOL mirror, BOOL rotate180);
 IPWC_API void __stdcall IPWC_SetPreviewEnabled(BOOL enabled);
+// Auto-framing: smoothly crops/zooms to keep the detected face(s) framed.
+// tightness 0..1: 0 = wide (head and shoulders), 1 = tight (head fills the frame).
+IPWC_API void __stdcall IPWC_SetAutoFraming(BOOL enabled, float tightness);
+// Face retouching, each 0..1 (0 = off): reduce redness of the skin, smooth the skin.
+IPWC_API void __stdcall IPWC_SetRetouch(float redness, float smoothing);
 
 // Copies up to capacity discovered phones; returns the total number found.
 IPWC_API int32_t __stdcall IPWC_GetDevices(IPWC_DEVICE* devices, int32_t capacity);

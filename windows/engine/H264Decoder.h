@@ -10,40 +10,43 @@
 #include <functional>
 #include <string>
 
+class GpuDevice;
+
+// A decoded NV12 frame, either in system memory (y/uv/pitch) or on the GPU (texture/subresource).
 struct DecodedFrame
 {
-    const uint8_t* y;
-    const uint8_t* uv;
-    LONG pitch;
-    UINT32 width;  // visible width
-    UINT32 height; // visible height
+    const uint8_t* y = nullptr;
+    const uint8_t* uv = nullptr;
+    LONG pitch = 0;
+    ID3D11Texture2D* texture = nullptr; // NV12 texture (array) owned by the decoder; valid during the callback
+    UINT subresource = 0;
+    UINT32 width = 0;  // visible width
+    UINT32 height = 0; // visible height
 };
 
 // Wraps the built-in Microsoft H.264 decoder MFT; input is Annex B access units, output NV12.
-// Uses GPU (DXVA/D3D11) decoding when available, which is needed for 4K at 30 fps.
+// Uses GPU (DXVA/D3D11) decoding on the shared GpuDevice when available, which is needed for 4K at 30 fps.
 class H264Decoder
 {
 public:
     using FrameCallback = std::function<void(const DecodedFrame&)>;
 
-    HRESULT Initialize(bool allowHardware);
+    HRESULT Initialize(GpuDevice* gpu, bool allowHardware);
     HRESULT Decode(const uint8_t* data, size_t length, LONGLONG timestamp, const FrameCallback& onFrame);
     bool IsHardware() const { return m_hardware; }
-    const std::wstring& AdapterName() const { return m_adapterName; }
+
+    // Copies a GPU frame to system memory (used when the effects pipeline is unavailable).
+    HRESULT ReadBack(const DecodedFrame& frame, const FrameCallback& onFrame);
 
 private:
     HRESULT EnableHardware();
     HRESULT ConfigureOutput();
     HRESULT DrainOutput(const FrameCallback& onFrame);
-    HRESULT DeliverTexture(IMFMediaBuffer* buffer, const FrameCallback& onFrame);
 
     Microsoft::WRL::ComPtr<IMFTransform> m_decoder;
-    Microsoft::WRL::ComPtr<ID3D11Device> m_device;
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_context;
-    Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> m_deviceManager;
+    GpuDevice* m_gpu = nullptr;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_staging;
     bool m_hardware = false;
-    std::wstring m_adapterName;
     UINT32 m_allocWidth = 0;
     UINT32 m_allocHeight = 0;
     UINT32 m_visibleWidth = 0;

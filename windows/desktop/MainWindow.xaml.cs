@@ -29,9 +29,11 @@ public partial class MainWindow : Window
     private bool _allowClose;
     private ConnectionState _lastState = (ConnectionState)(-1);
     private bool _initializing = true;
+    private readonly DispatcherTimer _saveTimer;
 
     internal event Action<EngineStatus>? StatusUpdated;
     internal event Action? HiddenToTray;
+    internal event Action? ExitRequested;
 
     internal MainWindow(Settings settings, string? cameraError)
     {
@@ -46,7 +48,21 @@ public partial class MainWindow : Window
         AutoReconnectBox.IsChecked = settings.AutoReconnect;
         HardwareDecodeBox.IsChecked = settings.HardwareDecode;
         AutostartBox.IsChecked = Autostart.IsEnabled;
+        CloseToTrayBox.IsChecked = settings.CloseToTray;
+        AutoFrameBox.IsChecked = settings.AutoFraming;
+        FramingSlider.Value = settings.Framing;
+        RednessSlider.Value = settings.RednessReduction;
+        SmoothingSlider.Value = settings.SkinSmoothing;
+        UpdateEffectLabels();
         IpBox.Text = string.IsNullOrEmpty(settings.LastDeviceName) ? settings.LastAddress : "";
+
+        // Sliders fire many changes while dragging; write the settings file once they settle.
+        _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+        _saveTimer.Tick += (_, _) =>
+        {
+            _saveTimer.Stop();
+            _settings.Save();
+        };
 
         if (cameraError != null)
         {
@@ -81,10 +97,18 @@ public partial class MainWindow : Window
     {
         if (!_allowClose)
         {
-            // Closing the window keeps the virtual camera running in the tray.
             e.Cancel = true;
-            Hide();
-            HiddenToTray?.Invoke();
+            if (_settings.CloseToTray)
+            {
+                // Keep the virtual camera running in the tray.
+                Hide();
+                HiddenToTray?.Invoke();
+            }
+            else
+            {
+                // Exit the app; deferred because a window can't be closed from inside OnClosing.
+                Dispatcher.BeginInvoke(() => ExitRequested?.Invoke());
+            }
         }
         base.OnClosing(e);
     }
@@ -204,6 +228,16 @@ public partial class MainWindow : Window
         };
         CameraValue.Text = camera;
         CameraValue.Foreground = cameraBrush;
+
+        bool effects = s.EffectsAvailable != 0;
+        EffectsUnavailableText.Visibility = effects ? Visibility.Collapsed : Visibility.Visible;
+        AutoFrameBox.IsEnabled = FramingSlider.IsEnabled = RednessSlider.IsEnabled = SmoothingSlider.IsEnabled = effects;
+        FaceStatusText.Text = !streaming ? ""
+            : s.Faces < 0 ? "Face detection needs the latest iPhone app; retouch applies to all skin tones."
+            : s.Faces == 0 ? "No face detected"
+            : s.Faces == 1 ? "Face detected"
+            : $"{s.Faces} faces detected";
+        FaceStatusText.Visibility = string.IsNullOrEmpty(FaceStatusText.Text) ? Visibility.Collapsed : Visibility.Visible;
 
         DisconnectButton.IsEnabled = s.State != ConnectionState.Idle;
         LiveBadge.Visibility = streaming ? Visibility.Visible : Visibility.Collapsed;
@@ -329,6 +363,56 @@ public partial class MainWindow : Window
         _settings.AutoReconnect = AutoReconnectBox.IsChecked == true;
         _settings.Save();
         Engine.SetAutoReconnect(_settings.AutoReconnect);
+    }
+
+    private void OnAutoFramingChanged(object sender, RoutedEventArgs e)
+    {
+        if (_initializing) return;
+        _settings.AutoFraming = AutoFrameBox.IsChecked == true;
+        ApplyEffects();
+    }
+
+    private void OnFramingChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_initializing) return;
+        _settings.Framing = (int)Math.Round(FramingSlider.Value);
+        ApplyEffects();
+    }
+
+    private void OnRetouchChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_initializing) return;
+        _settings.RednessReduction = (int)Math.Round(RednessSlider.Value);
+        _settings.SkinSmoothing = (int)Math.Round(SmoothingSlider.Value);
+        ApplyEffects();
+    }
+
+    private void ApplyEffects()
+    {
+        UpdateEffectLabels();
+        Engine.SetAutoFraming(_settings.AutoFraming, _settings.Framing / 100f);
+        Engine.SetRetouch(_settings.RednessReduction / 100f, _settings.SkinSmoothing / 100f);
+        _saveTimer.Stop();
+        _saveTimer.Start();
+    }
+
+    private void UpdateEffectLabels()
+    {
+        FramingValue.Text = FramingSlider.Value switch
+        {
+            < 25 => "Wide",
+            < 75 => "Medium",
+            _ => "Tight",
+        };
+        RednessValue.Text = RednessSlider.Value < 0.5 ? "Off" : $"{RednessSlider.Value:0} %";
+        SmoothingValue.Text = SmoothingSlider.Value < 0.5 ? "Off" : $"{SmoothingSlider.Value:0} %";
+    }
+
+    private void OnCloseToTrayChanged(object sender, RoutedEventArgs e)
+    {
+        if (_initializing) return;
+        _settings.CloseToTray = CloseToTrayBox.IsChecked == true;
+        _settings.Save();
     }
 
     private void OnHardwareDecodeChanged(object sender, RoutedEventArgs e)

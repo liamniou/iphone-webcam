@@ -13,6 +13,8 @@
 #include <wmcodecdsp.h>
 #include <wrl/client.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -23,8 +25,13 @@ namespace
 {
     UINT32 g_width = 1920;
     UINT32 g_height = 1080;
+    bool g_drawFace = true;  // draw the synthetic face and the reddish test patch
+    bool g_sendFaces = true; // send face metadata (message type 2) like the iPhone app
+    float g_faceSize = 0.30f; // face height as a fraction of the frame height
     constexpr UINT32 Fps = 30;
     constexpr uint16_t Port = 5005;
+
+    bool SendAll(SOCKET s, const uint8_t* data, size_t length);
 
     void Check(HRESULT hr, const char* what)
     {
@@ -80,6 +87,19 @@ namespace
         return encoder;
     }
 
+    struct FaceBox { float x, y, w, h; }; // normalized, top-left origin
+
+    // Where the synthetic face is at a given frame (slow Lissajous drift around the frame).
+    FaceBox FacePosition(uint32_t frame)
+    {
+        double t = frame / static_cast<double>(Fps);
+        float h = g_faceSize;
+        float w = h * g_height / g_width * 0.78f; // a bit narrower than tall, in pixels
+        float cx = 0.5f + 0.28f * static_cast<float>(std::sin(t * 0.35));
+        float cy = 0.48f + 0.14f * static_cast<float>(std::sin(t * 0.55 + 1.0));
+        return { cx - w / 2, cy - h / 2, w, h };
+    }
+
     void FillPattern(std::vector<uint8_t>& nv12, uint32_t frame)
     {
         const UINT32 W = g_width, H = g_height;
@@ -97,6 +117,56 @@ namespace
         UINT32 boxX = (frame * 12) % (W - 120);
         for (UINT32 y = H / 2 - 60; y < H / 2 + 60; ++y)
             memset(nv12.data() + y * W + boxX, 235, 120);
+
+        if (!g_drawFace) return;
+
+        // Reddish "skin" square in the bottom-left corner: must NOT change when a face is detected,
+        // because retouching is limited to the face area.
+        const uint8_t skinY = 150, skinCb = 108, redCr = 168;
+        UINT32 patch = H / 6;
+        for (UINT32 y = H - patch - H / 20; y < H - H / 20; ++y)
+            memset(nv12.data() + y * W + W / 30, skinY, patch);
+        for (UINT32 y = (H - patch - H / 20) / 2; y < (H - H / 20) / 2; ++y)
+            for (UINT32 x = W / 60; x < (W / 30 + patch) / 2; ++x)
+            {
+                uv[y * W + x * 2] = skinCb;
+                uv[y * W + x * 2 + 1] = redCr;
+            }
+
+        // The "face": a reddish skin ellipse with fine texture (for smoothing), eyes and a mouth.
+        FaceBox f = FacePosition(frame);
+        float cx = (f.x + f.w / 2) * W, cy = (f.y + f.h / 2) * H, rx = f.w / 2 * W, ry = f.h / 2 * H;
+        for (int y = std::max(0, static_cast<int>(cy - ry)); y < std::min<int>(H, static_cast<int>(cy + ry)); ++y)
+            for (int x = std::max(0, static_cast<int>(cx - rx)); x < std::min<int>(W, static_cast<int>(cx + rx)); ++x)
+            {
+                float dx = (x - cx) / rx, dy = (y - cy) / ry;
+                if (dx * dx + dy * dy > 1) continue;
+                uint32_t hash = (static_cast<uint32_t>(x) * 73856093u) ^ (static_cast<uint32_t>(y) * 19349663u);
+                int noise = static_cast<int>((hash >> 7) % 25) - 12; // skin texture / blemishes
+                bool eye = ((dx + 0.35f) * (dx + 0.35f) + (dy + 0.25f) * (dy + 0.25f) < 0.012f) ||
+                           ((dx - 0.35f) * (dx - 0.35f) + (dy + 0.25f) * (dy + 0.25f) < 0.012f);
+                bool mouth = std::abs(dy - 0.45f) < 0.04f && std::abs(dx) < 0.3f;
+                nv12[y * W + x] = static_cast<uint8_t>(eye ? 30 : mouth ? 90 : skinY + noise);
+            }
+        for (int y = std::max(0, static_cast<int>(cy - ry)) / 2; y < std::min<int>(H, static_cast<int>(cy + ry)) / 2; ++y)
+            for (int x = std::max(0, static_cast<int>(cx - rx)) / 2; x < std::min<int>(W, static_cast<int>(cx + rx)) / 2; ++x)
+            {
+                float dx = (x * 2 - cx) / rx, dy = (y * 2 - cy) / ry;
+                if (dx * dx + dy * dy > 1) continue;
+                uv[y * W + x * 2] = skinCb;
+                uv[y * W + x * 2 + 1] = redCr;
+            }
+    }
+
+    bool SendFaces(SOCKET s, uint32_t frame)
+    {
+        FaceBox f = FacePosition(frame);
+        uint8_t payload[1 + 16];
+        payload[0] = 1;
+        memcpy(payload + 1, &f, sizeof(f)); // little-endian float32 x, y, w, h
+        uint32_t messageLength = sizeof(payload) + 1;
+        uint8_t header[5] = { 0, 0, 0, static_cast<uint8_t>(messageLength), 2 };
+        return SendAll(s, header, sizeof(header)) && SendAll(s, payload, sizeof(payload));
     }
 
     bool SendAll(SOCKET s, const uint8_t* data, size_t length)
@@ -152,6 +222,13 @@ namespace
             bool ok = SendFrame(s, data, length);
             buffer->Unlock();
             if (!ok) return false;
+
+            // Like the iPhone app: face positions of a frame are sent after that frame's video,
+            // about 6 times per second. (The encoder delays frames, so use the output's timestamp.)
+            LONGLONG time = 0;
+            sample->GetSampleTime(&time);
+            uint32_t frameIndex = static_cast<uint32_t>((time + 10'000'000 / Fps / 2) / (10'000'000 / Fps));
+            if (g_drawFace && g_sendFaces && frameIndex % 5 == 0 && !SendFaces(s, frameIndex)) return false;
         }
     }
 
@@ -223,10 +300,18 @@ namespace
 
 int wmain(int argc, wchar_t** argv)
 {
-    for (int i = 1; i + 1 < argc; i += 2)
+    for (int i = 1; i < argc; ++i)
     {
-        if (wcscmp(argv[i], L"--width") == 0) g_width = _wtoi(argv[i + 1]);
-        else if (wcscmp(argv[i], L"--height") == 0) g_height = _wtoi(argv[i + 1]);
+        if (wcscmp(argv[i], L"--width") == 0 && i + 1 < argc) g_width = _wtoi(argv[++i]);
+        else if (wcscmp(argv[i], L"--height") == 0 && i + 1 < argc) g_height = _wtoi(argv[++i]);
+        else if (wcscmp(argv[i], L"--no-faces") == 0) g_sendFaces = false;
+        else if (wcscmp(argv[i], L"--no-face") == 0) g_drawFace = false;
+        else if (wcscmp(argv[i], L"--face-size") == 0 && i + 1 < argc) g_faceSize = static_cast<float>(_wtof(argv[++i]));
+        else
+        {
+            printf("Usage: FakePhone.exe [--width N] [--height N] [--face-size 0.05-0.6] [--no-faces (don't send face metadata)] [--no-face (plain pattern)]\n");
+            return 1;
+        }
     }
 
     setvbuf(stdout, nullptr, _IONBF, 0);
